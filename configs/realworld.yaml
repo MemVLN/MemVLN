@@ -1,0 +1,65 @@
+defaults:
+  - data: default
+  - task: sft_r2r_rxr_v2_w_traj_sum_w_mem
+  - llm: qwen3-4b-mem
+  - vision3d: streamvggt
+  - _self_
+
+# exp general info
+name: Qwen3-VLNCE   # project name of wandb
+note: default   # run name of wandb
+
+rng_seed: 42
+num_gpu: 8   # will be overrided by launch.py
+mode: train
+naming_keywords: [note]   # choose keywords to feature the exp run dir
+base_dir: /home/wangyan/bigai/results/qwen3-vlnce-realworld
+exp_dir: ""   # temporarily empty, will be set by run.py as base_dir + name + *naming_keywords
+pretrained_ckpt_path: "/home/wangyan/bigai/ckpts/vln/pytorch_model.bin"
+# instruction: "Pass the chairs on the right and move forward to the brown door and stop."
+# instruction: "Move forward towards the green plants on your right. When you pass the plants, you can see a red box. That's your destination. Stop at the red box."
+# instruction: "walk pass the armchairs towards the white cabinet. When you reach the cabinet, turn right and move forward. On your left there is a red box, stop at the red box."
+# instruction: "turn left and walk towards the plants. Stop by the plants."
+# instruction: "Turn around and walk towards the white cabinet. When you reach the cabinet, turn right and move forward along the hallway. Turn left at the first intersection. Keep
+              # moving forward until you see a red box on your left. Stop at the red box."
+# instruction: "Turn around and keep moving forward along the hallway to the end. Then turn right and move forward towards the grew box on the ground. Then stop at the box."
+instruction: "Now you are facing the glass windows of an office. There is a red fire extinguisher on your left. Walk pass the fire extinguisher and turn right. You should see 
+              a grey box on the ground with white cabinets on your right. Move toward the grey box and then turn left. Move foward towards the brown door and stop at the door."
+
+logger:
+  name: wandb
+  entity: bigai-gvl
+
+dataloader:
+  train:
+    batchsize: 1   # per-gpu batchsize
+    num_workers: 1
+  eval:
+    batchsize: 1   # per-gpu batchsize
+    num_workers: 1
+
+debug: False
+blind: False
+train_infer: False
+
+trainer: LeoTrainer
+training:
+  epochs: ${task.training.epochs}
+  gradient_accumulation_steps: 32
+  grad_norm: 1.0
+  optim:
+    name: AdamW
+    args:
+      lr: ${task.training.lr}
+      betas: [0.9, 0.999]
+      weight_decay: 0.05
+  schedule:
+    name: linear_warmup_cosine_decay
+    args:
+      warmup_steps: 400
+  save_interval: 5000
+  checkpoint_total_limit: 5
+
+eval:
+  num_batch_val: 10
+  val_interval: 1e8

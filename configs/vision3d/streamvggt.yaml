@@ -1,0 +1,6 @@
+name: StreamVGGT
+ckpt_path: /share/generalvision/huangjiangyong/pretrained_weights/StreamVGGT-1B.pth
+embed_dim: 1024
+merger_type: camera   # patch | camera
+fusion_op: add   # add | concat
+fusion_learnable: False

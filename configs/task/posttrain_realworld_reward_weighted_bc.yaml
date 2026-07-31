@@ -1,0 +1,25 @@
+# @package _global_
+
+# train
+task:
+  training:
+    lr: 2e-6
+    epochs: 1
+    dummy_lr_decay: False
+  leomix:
+    LeoMix:
+      mode: [train]
+      mix:
+        vln: [realworld]
+      ratio: [6.0]
+      ratio_unit: episode
+      train_dataloader_args: ${dataloader.train}
+      use_custom_sampler: True
+
+data:
+  vln:
+    realworld:
+      # AWR-lite: no value head, just geometry-return weighted BC.
+      sample_weight_mode: reward
+
+# no eval by default

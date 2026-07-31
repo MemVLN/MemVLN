@@ -1,0 +1,5 @@
+# Example inputs for extract_vlnce_video_parts.py.
+# Relative paths are resolved from the directory containing this manifest.
+# Replace these paths with videos produced by your own evaluation run.
+../eval_results/R2R/epoch_0/video/example_scene_1.mp4
+../eval_results/RxR/epoch_0/video/example_scene_2.mp4

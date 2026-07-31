@@ -1,0 +1,15 @@
+name: Qwen3-4B
+cfg_path: /share/generalvision/huangjiangyong/pretrained_weights/Qwen3-VL-4B-Instruct
+torch_dtype: bf16
+attn_implementation: flash_attention_2
+padding_side: left
+max_context_len: 256
+max_out_len: 256
+hidden_dim: 2560
+tune_proj: False
+lora:
+  flag: True
+  rank: 128
+  alpha: 256
+  target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+  dropout: 0.0

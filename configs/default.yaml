@@ -1,0 +1,64 @@
+defaults:
+  - data: default
+  - task: sft_r2r_rxr_v2_w_traj_sum_w_mem
+  - llm: qwen3-4b-mem
+  - vision3d: streamvggt
+  - _self_
+
+# exp general info
+name: Qwen3-VLNCE   # project name of wandb
+note: sft_r2r_rxr_v2_prompt_v2_memory_16frame_w_traj_sum_streamvggt_cache_feat
+
+rng_seed: 42
+num_gpu: 8   # will be overrided by launch.py
+mode: train
+naming_keywords: [note]   # choose keywords to feature the exp run dir
+base_dir: /share/generalvision/wangyan/results/qwen3-vlnce
+exp_dir: ""   # temporarily empty, will be set by run.py as base_dir + name + *naming_keywords
+pretrained_ckpt_path: ""   # specified on launch
+
+logger:
+  name: wandb
+  entity: bigai-gvl
+
+dataloader:
+  train:
+    batchsize: 1   # per-gpu batchsize
+    num_workers: 1
+  eval:
+    batchsize: 1   # per-gpu batchsize
+    num_workers: 1
+
+debug: False
+blind: False
+train_infer: False
+
+inference:
+  enabled: True
+  cache_grounded_memory: True
+  skip_memory_attention_weights: True
+  fast_habitat: True
+  empty_cache_on_episode_end: False
+  video_selection_seed: ${rng_seed}
+
+trainer: LeoTrainer
+training:
+  epochs: ${task.training.epochs}
+  gradient_accumulation_steps: 1
+  grad_norm: 1.0
+  optim:
+    name: AdamW
+    args:
+      lr: ${task.training.lr}
+      betas: [0.9, 0.999]
+      weight_decay: 0.05
+  schedule:
+    name: linear_warmup_cosine_decay
+    args:
+      warmup_steps: 400
+  save_interval: 5000
+  checkpoint_total_limit: 5
+
+eval:
+  num_batch_val: 10
+  val_interval: 1e8

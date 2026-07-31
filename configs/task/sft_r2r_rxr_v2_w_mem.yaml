@@ -1,0 +1,32 @@
+# train
+training:
+  lr: 2e-5
+  epochs: 1
+  dummy_lr_decay: True
+
+leomix:
+  LeoMix:
+    mode: [train]
+    mix:
+      vln: [mp3d_r2r, mp3d_rxr_v2]
+    ratio: 1.0
+    train_dataloader_args: ${dataloader.train}
+    use_custom_sampler: True
+
+vlnce:
+  R2R:
+    mode: []
+    evaluator: VLNCEEvaluator
+    args:
+      habitat_config_path: "habitat/r2r.yaml"
+      split: "val_unseen"
+      env_num: ${num_gpu}
+      save_video: 10
+  RxR:
+    mode: []
+    evaluator: VLNCEEvaluator
+    args:
+      habitat_config_path: "habitat/rxr.yaml"
+      split: "val_unseen"
+      env_num: ${num_gpu}
+      save_video: 10

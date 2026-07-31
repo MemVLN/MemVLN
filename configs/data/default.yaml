@@ -1,0 +1,41 @@
+annotation_base: /share/generalvision/huangjiangyong/leo2_data
+
+sort_scene: True
+num_frames: 32
+visual_size:
+  image:
+    shortest_edge: 65536  # 32 * 32 * 8 * 8
+    longest_edge: 307200  # 32 * 32 * 15 * 20
+  video:
+    shortest_edge: 4096   # 32 * 32 * 2 * 2
+    longest_edge: 9830400 # 32 * 32 * 2 * 16 * 15 * 20
+
+vln:
+  anno_dir: ${data.annotation_base}/vln
+  obs_hist_sample: nearest   # nearest | uniform
+  max_num_frames: 16
+  merge_action: True
+  max_act_hist: 0
+  use_sub_inst: True
+  prompt_format: v2
+  memory_prompt: True
+  sample_step: 1
+  num_future_steps: 1
+  num_stop_steps: 1
+  aug_stop_steps: false
+  skip_merge_step_obs: False
+  vggt_cache_feat: True
+  realworld:
+    root_dirs: []
+    # Resize real robot frames to the sim training input resolution before
+    # Qwen/VGGT preprocessing. Format is [width, height]; set to [] to disable.
+    image_resize_size: [640, 480]
+    # BC labels are reconstructed by merging the physical executed_actions
+    # trajectory; requested_actions are retained for diagnostics.
+    sample_weight_mode: correction   # none | correction | reward | hybrid
+    match_weight: 0.5
+    mismatch_weight: 3.0
+    stop_weight: 2.0
+    min_weight: 0.5
+    max_weight: 4.0
+    stop_dist_threshold: 0.4
