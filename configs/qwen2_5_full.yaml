@@ -74,3 +74,5 @@ training:
 eval:
   num_batch_val: 10
   val_interval: 1e8
+  # Set False only for bounded smoke runs that validate train/save/reload.
+  run_after_train: True

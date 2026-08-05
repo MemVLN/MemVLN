@@ -215,6 +215,11 @@ Qwen2.5 endpoints. Because the Full endpoint jointly adds Memory, StreamVGGT,
 and trajectory-summary supervision, `Full - Baseline` is a complete MemVLN
 package comparison and must not be reported as a pure Memory-only gain.
 
+For a bounded single-GPU validation sequence, including real-weight loading,
+one-batch save/resume, two-step generation, cache reset, and explicit 24GB OOM
+classification, follow
+[`docs/QWEN25_4090_SMOKE_TEST.md`](docs/QWEN25_4090_SMOKE_TEST.md).
+
 ## Data
 
 MemVLN uses [R2R](https://bringmeaspoon.org/),

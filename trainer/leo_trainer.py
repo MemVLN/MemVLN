@@ -234,6 +234,9 @@ class LeoTrainer():
         self.save_interval = cfg.training.save_interval
         self.val_interval = cfg.eval.val_interval
         self.num_batch_val = cfg.eval.num_batch_val
+        self.run_validation_after_train = bool(
+            cfg.eval.get("run_after_train", True)
+        )
 
         self.debug = getattr(cfg, 'debug', False)
         self.max_train_batches = resolve_max_train_batches(cfg.training)
@@ -842,7 +845,8 @@ class LeoTrainer():
                 loader = list(self.data_loaders['train']['leomix'].values())[0]
                 if hasattr(loader.sampler, 'sync_progress'):
                     loader.sampler.sync_progress()
-                self.val_step(epoch)
+                if self.run_validation_after_train:
+                    self.val_step(epoch)
         else:
             self.val_step(0)
 

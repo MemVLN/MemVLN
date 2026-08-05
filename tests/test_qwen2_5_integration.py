@@ -137,6 +137,7 @@ class FactoryAndConfigTests(unittest.TestCase):
         self.assertEqual(baseline.llm.hidden_dim, 3584)
         self.assertEqual(baseline.llm.lora.rank, 16)
         self.assertEqual(baseline.llm.lora.alpha, 16)
+        self.assertTrue(baseline.eval.run_after_train)
         self.assertNotIn("mem_module", baseline.llm)
         self.assertEqual(baseline.vision3d.name, "Dummy")
         self.assertFalse(baseline.data.vln.memory_prompt)
@@ -149,6 +150,7 @@ class FactoryAndConfigTests(unittest.TestCase):
         self.assertEqual(full.llm.hidden_dim, 3584)
         self.assertEqual(full.llm.lora.rank, 16)
         self.assertEqual(full.llm.lora.alpha, 16)
+        self.assertTrue(full.eval.run_after_train)
         self.assertEqual(
             list(full.llm.lora.target_modules),
             list(baseline.llm.lora.target_modules),
