@@ -39,6 +39,44 @@ BASE_MODEL_INPUT_KEYS = (
     'video_grid_thw',
     'vggt_input',
 )
+_QWEN25_STREAMVGGT_UNUSED_HEAD_PREFIXES = (
+    "camera_head.",
+    "point_head.",
+    "depth_head.",
+    "track_head.",
+)
+
+
+def validate_qwen25_streamvggt_checkpoint_keys(missing_keys, unexpected_keys):
+    """Reject partial Qwen2.5 StreamVGGT backbone loads.
+
+    The project instantiates only StreamVGGT's aggregator. Official checkpoints
+    can therefore contain unused prediction heads, but every instantiated key
+    must load and no other unexpected namespace is accepted.
+    """
+    missing_keys = tuple(sorted(str(key) for key in missing_keys))
+    unexpected_keys = tuple(sorted(str(key) for key in unexpected_keys))
+    invalid_unexpected = tuple(
+        key
+        for key in unexpected_keys
+        if not key.startswith(_QWEN25_STREAMVGGT_UNUSED_HEAD_PREFIXES)
+    )
+    if missing_keys or invalid_unexpected:
+        details = []
+        if missing_keys:
+            details.append(
+                f"missing instantiated keys ({len(missing_keys)}): "
+                f"{list(missing_keys[:8])}"
+            )
+        if invalid_unexpected:
+            details.append(
+                f"unexpected non-head keys ({len(invalid_unexpected)}): "
+                f"{list(invalid_unexpected[:8])}"
+            )
+        raise RuntimeError(
+            "Qwen2.5 StreamVGGT checkpoint is incompatible; " + "; ".join(details)
+        )
+    return unexpected_keys
 
 
 def resolve_memory_param_dtype(cfg):
@@ -200,9 +238,20 @@ class LeoAgent(nn.Module):
         vggt_ckpt = torch.load(cfg.vision3d.ckpt_path, weights_only=True)
         missing_keys, unexpected_keys = self.model.model.vggt.load_state_dict(vggt_ckpt, strict=False)
         self.model.model.vggt.to(self.model.model.visual.dtype)
-        logger.info(f"Loaded VGGT (stream={self.model.model.vggt.stream}) weights from {cfg.vision3d.ckpt_path}\n"
-                    f"Missing keys: {missing_keys}\n"
-                    f"Unexpected keys: {unexpected_keys}")
+        if self.model_family == QWEN2_5_VL:
+            unused_head_keys = validate_qwen25_streamvggt_checkpoint_keys(
+                missing_keys,
+                unexpected_keys,
+            )
+            logger.info(
+                f"Loaded VGGT (stream={self.model.model.vggt.stream}) weights "
+                f"from {cfg.vision3d.ckpt_path}; all instantiated keys matched, "
+                f"ignored {len(unused_head_keys)} unused official head keys"
+            )
+        else:
+            logger.info(f"Loaded VGGT (stream={self.model.model.vggt.stream}) weights from {cfg.vision3d.ckpt_path}\n"
+                        f"Missing keys: {missing_keys}\n"
+                        f"Unexpected keys: {unexpected_keys}")
         self.model.model.vggt.eval()
         self.model.model.vggt.train = disabled_train
 

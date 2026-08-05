@@ -22,7 +22,10 @@ from transformers import (
     Qwen2_5_VLProcessor,
 )
 
-from model.leo_agent import LeoAgent
+from model.leo_agent import (
+    LeoAgent,
+    validate_qwen25_streamvggt_checkpoint_keys,
+)
 from model.qwen.factory import (
     MEMORY_END_TOKEN,
     MEMORY_START_TOKEN,
@@ -220,6 +223,37 @@ class FactoryAndConfigTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "use_fast=False"):
             build_processor(cfg, use_fast=True)
+
+    def test_qwen25_streamvggt_load_accepts_only_unused_official_heads(self):
+        unused = validate_qwen25_streamvggt_checkpoint_keys(
+            [],
+            [
+                "track_head.tracker.query_ref_token",
+                "camera_head.empty_pose_tokens",
+                "depth_head.norm.weight",
+                "point_head.norm.weight",
+            ],
+        )
+        self.assertEqual(
+            unused,
+            (
+                "camera_head.empty_pose_tokens",
+                "depth_head.norm.weight",
+                "point_head.norm.weight",
+                "track_head.tracker.query_ref_token",
+            ),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "missing instantiated keys"):
+            validate_qwen25_streamvggt_checkpoint_keys(
+                ["aggregator.frame_blocks.0.norm1.weight"],
+                [],
+            )
+        with self.assertRaisesRegex(RuntimeError, "unexpected non-head keys"):
+            validate_qwen25_streamvggt_checkpoint_keys(
+                [],
+                ["aggregator.unknown.weight"],
+            )
 
     def test_qwen25_vggt_glue_does_not_replace_official_preprocess(self):
         class VideoProcessor:
