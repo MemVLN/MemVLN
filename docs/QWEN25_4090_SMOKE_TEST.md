@@ -553,11 +553,14 @@ for report in (baseline, full):
     assert len(report["steps"]) == 2
     assert all(step["visual_token_count"] == 391 for step in report["steps"])
     assert all(step["image_grid_thw"] == [[1, 34, 46]] for step in report["steps"])
+    if report["checkpoint"]["status"] == "loaded":
+        assert report["checkpoint"]["missing_trainable_keys"] == []
 
 assert all(step["memory_token_count"] == 0 for step in baseline["steps"])
 assert all(step["memory_token_count"] == 300 for step in full["steps"])
 assert all(step["vggt_input_shape"] == [1, 3, 420, 560] for step in full["steps"])
-assert any(value > 0 for value in full["episode_reset_counts"].values())
+assert full["episode_reset_counts"]["memory_episodes"] > 0
+assert full["episode_reset_counts"]["vggt_past_key_values"] > 0
 print("generation contracts: PASS")
 PY
 ```

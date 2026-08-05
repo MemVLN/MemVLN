@@ -14,6 +14,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from accelerate.state import PartialState
 from hydra import compose, initialize_config_dir
 from PIL import Image
 import transformers
@@ -205,13 +206,42 @@ def load_smoke_checkpoint(agent: LeoAgent, checkpoint: Path | None) -> dict:
             "Smoke checkpoint contains keys unknown to the current endpoint: "
             f"{unexpected_keys}"
         )
+    trainable_keys = {
+        name for name, parameter in agent.named_parameters()
+        if parameter.requires_grad
+    }
+    missing_trainable_keys = sorted(trainable_keys.intersection(missing_keys))
+    if missing_trainable_keys:
+        raise RuntimeError(
+            "Smoke checkpoint is missing trainable endpoint parameters: "
+            f"{missing_trainable_keys}"
+        )
     return {
         "status": "loaded",
         "path": str(checkpoint_path.resolve()),
         "saved_key_count": len(state_dict),
         "missing_frozen_key_count": len(missing_keys),
+        "missing_trainable_keys": missing_trainable_keys,
         "unexpected_keys": list(unexpected_keys),
     }
+
+
+def build_agent(cfg, *, cpu: bool) -> LeoAgent:
+    """Construct the agent after initializing Accelerate's shared state."""
+    PartialState(cpu=cpu)
+    return LeoAgent(cfg)
+
+
+def validate_episode_reset(agent: LeoAgent, reset_counts: dict) -> None:
+    """Require Full smoke runs to prove both episode caches were cleared."""
+    if agent.use_mem and int(reset_counts.get("memory_episodes", 0)) < 1:
+        raise RuntimeError(
+            "Full smoke did not clear an episode from the Memory bank."
+        )
+    if agent.use_vggt and int(reset_counts.get("vggt_past_key_values", 0)) < 1:
+        raise RuntimeError(
+            "Full smoke did not clear an episode from the StreamVGGT cache."
+        )
 
 
 def run() -> dict:
@@ -225,7 +255,7 @@ def run() -> dict:
         torch.cuda.reset_peak_memory_stats(device)
 
     started = time.perf_counter()
-    agent = LeoAgent(cfg)
+    agent = build_agent(cfg, cpu=device.type == "cpu")
     configure_processor(agent.processor, cfg, use_vggt=agent.use_vggt)
     checkpoint = load_smoke_checkpoint(agent, args.checkpoint)
     parameter_counts = count_trainable_parameters(
@@ -297,6 +327,7 @@ def run() -> dict:
         )
 
     reset_counts = agent.reset_episode_state(episode_id)
+    validate_episode_reset(agent, reset_counts)
     report = {
         "status": "passed",
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),

@@ -1147,6 +1147,18 @@ class LeoMix(Dataset):
     def processor(self):
         return self.datasets[0].processor
 
+    @property
+    def model_family(self):
+        if not self.datasets:
+            raise ValueError("LeoMix requires at least one child dataset")
+        model_families = {dataset.model_family for dataset in self.datasets}
+        if len(model_families) != 1:
+            raise ValueError(
+                "LeoMix child datasets must use one model family, got "
+                f"{sorted(model_families)}"
+            )
+        return next(iter(model_families))
+
     def __getitem__(self, index):
         entry = self.index_map[index]
         data_dict = self.datasets[entry['dataset_idx']][entry['local_idx']]

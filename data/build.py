@@ -10,6 +10,7 @@ from model.qwen.factory import (
     apply_chat_template,
     count_multimodal_tokens,
     mask_labels_for_last_assistant,
+    resolve_model_family,
 )
 from model.streamvggt.processing import (
     build_online_vggt_input,
@@ -72,6 +73,7 @@ def make_collate_fn_qwen(
 
 def build_dataloader_leo(cfg, split, dataset_name, dataloader_args):
     dataset = get_dataset_leo(cfg, split, dataset_name)
+    model_family = resolve_model_family(cfg)
     use_vggt = 'vggt' in cfg.vision3d.name.lower()
     dense_vggt_input = resolve_dense_vggt_input(cfg.data.vln) if use_vggt else False
     if split == "train" and dataset.use_custom_sampler:
@@ -83,7 +85,7 @@ def build_dataloader_leo(cfg, split, dataset_name, dataloader_args):
         dataset, batch_size = dataloader_args.batchsize, num_workers = dataloader_args.num_workers,
         collate_fn = make_collate_fn_qwen(
             dataset.processor,
-            model_family=dataset.model_family,
+            model_family=model_family,
             use_vggt=use_vggt,
             dense_vggt_input=dense_vggt_input,
         ), pin_memory = True,

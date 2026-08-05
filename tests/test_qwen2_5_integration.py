@@ -13,6 +13,7 @@ import torch.nn as nn
 from accelerate import init_empty_weights
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
+from peft import LoraConfig, get_peft_model
 from PIL import Image
 from transformers import (
     AutoConfig,
@@ -510,6 +511,54 @@ class TinyOfficialModelContractTests(unittest.TestCase):
 
         self.assertEqual(tuple(output.logits.shape), (1, 6, 128))
         self.assertEqual(model.model.memory.calls, 1)
+
+    def test_peft_generation_updates_memory_only_during_prefill(self):
+        class FakeMemory(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.calls = 0
+
+            def forward(self, visual_features, *args):
+                self.calls += 1
+                return visual_features.new_zeros(
+                    visual_features.shape[0],
+                    2,
+                    visual_features.shape[-1],
+                )
+
+        model = Qwen2_5_VLForConditionalGeneration_Mem_VGGT(
+            tiny_qwen25_config()
+        ).eval()
+        memory = FakeMemory()
+        model.model.memory = memory
+        model.model.memory_token_id = 124
+        model = get_peft_model(
+            model,
+            LoraConfig(
+                task_type="CAUSAL_LM",
+                target_modules=["q_proj"],
+                r=2,
+                lora_alpha=2,
+                bias="none",
+            ),
+        ).eval()
+        input_ids = torch.tensor([[122, 120, 123, 124, 124, 1]])
+
+        output_ids = model.generate(
+            input_ids=input_ids,
+            attention_mask=torch.ones_like(input_ids),
+            pixel_values=torch.randn(4, 24),
+            image_grid_thw=torch.tensor([[1, 2, 2]]),
+            episode_id=["episode-a"],
+            clip_id=torch.tensor([0]),
+            current_odom=torch.zeros(1, 3),
+            do_sample=False,
+            num_beams=1,
+            max_new_tokens=2,
+        )
+
+        self.assertEqual(tuple(output_ids.shape), (1, 8))
+        self.assertEqual(memory.calls, 1)
 
     def test_generation_keeps_visual_state_only_during_prefill(self):
         model = Qwen2_5_VLForConditionalGeneration_Mem_VGGT(
