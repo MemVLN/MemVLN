@@ -29,7 +29,14 @@ from evaluator.vlnce_rollout import (
     save_video_traces,
     select_video_episode_keys,
 )
-from model.qwen.processing_qwen3_vl import Qwen3VLProcessor
+from model.qwen.factory import (
+    apply_chat_template,
+    build_processor,
+    configure_processor,
+    count_multimodal_tokens,
+    initialize_memory_tokens,
+    resolve_model_family,
+)
 from model.streamvggt.processing import (
     build_online_vggt_input,
     resolve_dense_vggt_input,
@@ -45,26 +52,21 @@ class VLNCEEvaluator():
         self.cfg = cfg
         self.device = torch.device(f"cuda:{os.environ.get('LOCAL_RANK', 0)}")
         self.model = model
-        # self.processor = self.model.processor if self.model is not None else None
-        self.processor = Qwen3VLProcessor.from_pretrained(
-            cfg.llm.cfg_path, padding_side=getattr(cfg.llm, "padding_side", "left"),
+        self.model_family = resolve_model_family(cfg)
+        self.processor = build_processor(
+            cfg,
             min_frames=1, max_frames=cfg.data.vln.max_num_frames
         )
-        self.processor.video_processor.do_sample_frames = False
-        self.processor.image_processor.size = {
-            'shortest_edge': cfg.data.visual_size.image.shortest_edge,
-            'longest_edge': cfg.data.visual_size.image.longest_edge,
-        }
-        self.processor.video_processor.size = {
-            'shortest_edge': cfg.data.visual_size.video.shortest_edge,
-            'longest_edge': cfg.data.visual_size.video.longest_edge,
-        }
         self.use_vggt = 'vggt' in cfg.vision3d.name.lower()
-        self.processor.fix_video_preprocess(use_vggt=self.use_vggt)
+        configure_processor(self.processor, cfg, use_vggt=self.use_vggt)
 
         self.use_mem = True if cfg.llm.get("mem_module", None) is not None else False
         if self.use_mem:
-            self.processor.__init_memory__(cfg.llm.mem_module.memory_token_num)
+            initialize_memory_tokens(
+                self.processor,
+                int(cfg.llm.mem_module.memory_token_num),
+                self.model_family,
+            )
 
         self.base_save_dir = Path(cfg.exp_dir) / 'eval_results' / dataset_name
         self.base_save_dir.mkdir(parents=True, exist_ok=True)
@@ -254,6 +256,8 @@ class VLNCEEvaluator():
                 trace_navigation_text = []
                 trace_generation_steps = []
                 trace_generated_text = []
+                visual_token_counts = []
+                memory_token_counts = []
                 data_dict = input_dict = output_dict = None
                 while not env.episode_over:
                     rgb = observations['rgb']
@@ -344,14 +348,26 @@ class VLNCEEvaluator():
                         else:
                             raise ValueError(f"Invalid navigation prompt format: {self.prompt_format}")
 
-                        data_dict = self.processor.apply_chat_template(
+                        data_dict = apply_chat_template(
+                            self.processor,
                             messages,
+                            self.model_family,
                             tokenize=True,
                             add_generation_prompt=True,
                             return_dict=True,
                             padding=True,
                             return_tensors="pt",
                         )
+                        if self.model_family == "qwen2_5_vl":
+                            token_counts = count_multimodal_tokens(
+                                data_dict["input_ids"], self.processor
+                            )
+                            visual_token_counts.append(
+                                int(token_counts["visual_token_count"][0].item())
+                            )
+                            memory_token_counts.append(
+                                int(token_counts["memory_token_count"][0].item())
+                            )
                         if self.use_vggt:
                             data_dict["vggt_input"] = build_online_vggt_input(
                                 self.processor,
@@ -457,6 +473,9 @@ class VLNCEEvaluator():
                 for key in metric_keys:
                     if key in metrics:
                         result[key] = metrics[key]
+                if self.model_family == "qwen2_5_vl":
+                    result["visual_token_counts"] = visual_token_counts
+                    result["memory_token_counts"] = memory_token_counts
 
                 with open(os.path.join(self.save_dir, f"results.json"), 'a') as f:
                     fcntl.flock(f, fcntl.LOCK_EX)

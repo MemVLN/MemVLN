@@ -1,0 +1,21 @@
+name: Qwen2.5-7B
+model_family: qwen2_5_vl
+cfg_path: ${oc.env:QWEN25_VL_7B_PATH,/Users/jetpack/Documents/pretrained_weights/Qwen2.5-VL-7B-Instruct}
+# Set this to an immutable Hugging Face commit when cfg_path is a Hub model ID.
+# Local checkpoints are pinned by the runtime shard manifest hash instead.
+revision: null
+torch_dtype: bf16
+attn_implementation: flash_attention_2
+padding_side: left
+max_context_len: 128000
+max_out_len: 256
+hidden_dim: 3584
+tune_proj: False
+lora:
+  flag: True
+  # Match the earlier Qwen2.5-VL control recipe. With standard PEFT LoRA,
+  # alpha / rank = 1 keeps the adapter scaling explicit and reproducible.
+  rank: 16
+  alpha: 16
+  target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+  dropout: 0.0

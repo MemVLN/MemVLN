@@ -120,6 +120,16 @@ class OnlineVGGTProcessingTests(unittest.TestCase):
             torch.tensor([3, 4], dtype=output[1].dtype) / 255,
         )
 
+    def test_fixed_geometry_grid_is_independent_of_qwen_image_grid(self):
+        self.processor.vggt_input_grid_hw = (30, 40)
+
+        self.build(messages_for([], solid_image(7)))
+
+        torch.testing.assert_close(
+            self.video_processor.kwargs["video_grid_thw"],
+            torch.tensor([[1, 30, 40]]),
+        )
+
     def test_missing_current_image_fails_fast(self):
         messages = [{
             "role": "user",

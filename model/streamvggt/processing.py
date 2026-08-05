@@ -98,6 +98,18 @@ def build_online_vggt_input(
             f"{grid_batch_size} grids for {batch_size} samples."
         )
 
+    fixed_grid_hw = getattr(processor, "vggt_input_grid_hw", None)
+    if fixed_grid_hw is None:
+        vggt_grid_thw = image_grid_thw
+    else:
+        grid_h, grid_w = fixed_grid_hw
+        if isinstance(image_grid_thw, torch.Tensor):
+            vggt_grid_thw = image_grid_thw.new_tensor(
+                [[1, grid_h, grid_w]] * batch_size
+            )
+        else:
+            vggt_grid_thw = [[1, grid_h, grid_w]] * batch_size
+
     if dense_history:
         history_images = extract_image_info_from_video(messages, max_frames=2)
         if len(history_images) != batch_size:
@@ -129,7 +141,7 @@ def build_online_vggt_input(
 
     processed = preprocess(
         videos=frame_groups,
-        video_grid_thw=image_grid_thw,
+        video_grid_thw=vggt_grid_thw,
         patch_size=14,
         temporal_patch_size=2,
         temporal_pad=False,

@@ -1,0 +1,75 @@
+defaults:
+  - data: default
+  - task: sft_r2r_rxr_v2
+  - llm: qwen2_5-7b
+  - vision3d: dummy
+  - _self_
+
+name: Qwen2.5-VLNCE
+note: qwen2_5_7b_r2r_rxr_v2_baseline
+
+rng_seed: 42
+num_gpu: 1
+mode: train
+naming_keywords: [note]
+base_dir: ${oc.env:MEMVLN_OUTPUT_DIR,outputs}
+exp_dir: ""
+pretrained_ckpt_path: ""
+
+logger:
+  name: wandb
+  entity: bigai-gvl
+
+dataloader:
+  train:
+    batchsize: 1
+    num_workers: 1
+  eval:
+    batchsize: 1
+    num_workers: 1
+
+debug: False
+blind: False
+train_infer: False
+
+data:
+  vln:
+    memory_prompt: False
+
+inference:
+  enabled: True
+  cache_grounded_memory: False
+  skip_memory_attention_weights: False
+  fast_habitat: False
+  empty_cache_on_episode_end: False
+  video_selection_seed: ${rng_seed}
+
+reproducibility:
+  write_manifest: True
+  require_pinned_revision: True
+
+trainer: LeoTrainer
+training:
+  epochs: ${task.training.epochs}
+  gradient_accumulation_steps: 1
+  # Optional smoke-test controls; formal runs keep the full epoch and native
+  # activation behavior unless explicitly overridden.
+  max_train_batches: null
+  gradient_checkpointing: False
+  grad_norm: 1.0
+  optim:
+    name: AdamW
+    args:
+      lr: ${task.training.lr}
+      betas: [0.9, 0.999]
+      weight_decay: 0.05
+  schedule:
+    name: linear_warmup_cosine_decay
+    args:
+      warmup_steps: 400
+  save_interval: 5000
+  checkpoint_total_limit: 5
+
+eval:
+  num_batch_val: 10
+  val_interval: 1e8

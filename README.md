@@ -139,6 +139,7 @@ should be recorded alongside new reproduction runs.
 Download:
 
 - [Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct)
+- [Qwen2.5-VL-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct)
 - [StreamVGGT](https://github.com/wzzheng/StreamVGGT)
 
 The April run used a checkpoint named `StreamVGGT-1B.pth`. This repository's
@@ -153,6 +154,66 @@ Pass local paths with Hydra overrides:
 llm.cfg_path=/path/to/Qwen3-VL-4B-Instruct
 vision3d.ckpt_path=/path/to/the-April-StreamVGGT-1B.pth
 ```
+
+## Qwen2.5 reviewer-control endpoints
+
+Two controlled Qwen2.5-VL-7B endpoints are provided without changing the
+Qwen3 default configuration:
+
+- `configs/qwen2_5_baseline.yaml`: official Transformers 4.57
+  `Qwen2_5_VLForConditionalGeneration`, trained only on R2R+RxR navigation.
+- `configs/qwen2_5_full.yaml`: the same official backbone with the existing
+  Memory, frozen StreamVGGT, camera merger, and trajectory-summary recipe.
+
+Both use the official slow Qwen2.5 processor, `fps=2.0`, no processor-side
+frame sampling, the same visual pixel budget, and seed 42. Full MemVLN keeps
+300 Memory tokens and 100 frame tokens; these are independent of Qwen2.5's
+391 native image tokens at 640x480. The camera-only StreamVGGT branch remains
+fixed at the Qwen3 experiment's `30x40` grid and 420x560 geometry input, while
+the official Qwen2.5 VLM branch uses its native `34x46` grid.
+
+The two reviewer-control endpoints also lock the same LoRA recipe: rank 16,
+alpha 16, dropout 0, bias disabled, and the seven language projection targets
+listed in the LLM configs. This matches the prior Qwen2.5 control setting and
+keeps Baseline versus Full free of LoRA-capacity changes. It is a controlled
+experiment choice rather than a claim of universal optimality; the current
+[Qwen VL fine-tuning example](https://github.com/QwenLM/Qwen3-VL/tree/main/qwen-vl-finetune)
+uses rank 8 and alpha 16, while the
+[PEFT LoRA reference](https://huggingface.co/docs/peft/package_reference/lora)
+documents rank and alpha as tunable scaling parameters.
+
+Example launches:
+
+```bash
+QWEN25_VL_7B_PATH=/path/to/Qwen2.5-VL-7B-Instruct \
+python launch.py \
+  --mode accelerate \
+  --config configs/qwen2_5_baseline.yaml \
+  --gpu_per_node 8 \
+  --strategy ddp \
+  data.annotation_base=/path/to/annotations \
+  base_dir=/path/to/outputs
+
+QWEN25_VL_7B_PATH=/path/to/Qwen2.5-VL-7B-Instruct \
+STREAMVGGT_CKPT=/path/to/StreamVGGT-1B.pth \
+python launch.py \
+  --mode accelerate \
+  --config configs/qwen2_5_full.yaml \
+  --gpu_per_node 8 \
+  --strategy ddp \
+  data.annotation_base=/path/to/annotations \
+  base_dir=/path/to/outputs
+```
+
+Each Qwen2.5 run saves `config.yaml` and `reproducibility.json`. The latter
+records Transformers version, local base-shard hashes, raw/effective trainable
+parameter counts, token budgets, seed, dataset mixture, and evaluation splits.
+When using a Hugging Face model ID instead of a local snapshot, set
+`llm.revision` to an immutable commit. Qwen3 checkpoints, LoRA adapters,
+Memory weights, and merger weights are intentionally not migrated to these
+Qwen2.5 endpoints. Because the Full endpoint jointly adds Memory, StreamVGGT,
+and trajectory-summary supervision, `Full - Baseline` is a complete MemVLN
+package comparison and must not be reported as a pure Memory-only gain.
 
 ## Data
 

@@ -19,6 +19,12 @@ from deepspeed.runtime.fp16.loss_scaler import LossScaler
 torch.serialization.add_safe_globals([ZeroStageEnum, LossScaler])
 
 from common.misc import CustomAccelerator
+from common.optim_utils import build_lora_optimizer_params
+from common.reproducibility import (
+    build_reproducibility_manifest,
+    hash_artifact_file,
+    write_json_atomic,
+)
 from data.build import build_dataloader_leo
 from evaluator.build import build_eval_leo
 from model.leo_agent import LeoAgent
@@ -96,6 +102,43 @@ def resolve_checkpoint_total_limit(training_cfg):
             f"got {total_limit}"
         )
     return total_limit
+
+
+def resolve_max_train_batches(training_cfg):
+    """Validate an optional per-epoch batch cap used by smoke tests."""
+    max_batches = training_cfg.get("max_train_batches", None)
+    if max_batches is None:
+        return None
+    if isinstance(max_batches, bool) or not isinstance(max_batches, int):
+        raise TypeError(
+            "training.max_train_batches must be a positive integer or null, "
+            f"got {max_batches!r}"
+        )
+    if max_batches < 1:
+        raise ValueError(
+            "training.max_train_batches must be at least 1 or null, "
+            f"got {max_batches}"
+        )
+    return max_batches
+
+
+def configure_gradient_checkpointing(model, enabled):
+    """Enable non-reentrant checkpointing on the wrapped Transformers model."""
+    if not enabled:
+        return False
+
+    transformer_model = getattr(model, "model", None)
+    enable = getattr(transformer_model, "gradient_checkpointing_enable", None)
+    if not callable(enable):
+        raise TypeError(
+            "training.gradient_checkpointing=True requires the wrapped model "
+            "to expose gradient_checkpointing_enable()."
+        )
+    enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    config = getattr(transformer_model, "config", None)
+    if config is not None and hasattr(config, "use_cache"):
+        config.use_cache = False
+    return True
 
 
 def resolve_model_checkpoint_path(path):
@@ -193,6 +236,7 @@ class LeoTrainer():
         self.num_batch_val = cfg.eval.num_batch_val
 
         self.debug = getattr(cfg, 'debug', False)
+        self.max_train_batches = resolve_max_train_batches(cfg.training)
         self.grad_norm = getattr(cfg.training, 'grad_norm', 1.0)
         self.train_infer = getattr(cfg, 'train_infer', False)
         self.use_custom_sampler = getattr(cfg.task.leomix.LeoMix, 'use_custom_sampler', False)
@@ -262,13 +306,92 @@ class LeoTrainer():
 
         # build model
         self.model = LeoAgent(cfg)
+        configure_gradient_checkpointing(
+            self.model,
+            bool(cfg.training.get("gradient_checkpointing", False)),
+        )
         learnable_named_params = self.model.get_learnable_named_params()
         self.accelerator.learn_params_list = list(learnable_named_params.keys())
+
+        reproducibility_cfg = cfg.get("reproducibility", {})
+        if bool(reproducibility_cfg.get("write_manifest", False)):
+            revision = cfg.llm.get("revision", None)
+            if (
+                bool(
+                    reproducibility_cfg.get(
+                        "require_pinned_revision", False
+                    )
+                )
+                and not Path(str(cfg.llm.cfg_path)).expanduser().exists()
+                and not revision
+            ):
+                raise ValueError(
+                    "Formal Qwen2.5 runs using a Hugging Face model ID must "
+                    "set llm.revision to an immutable commit. Local "
+                    "checkpoints are pinned by the saved shard hashes."
+                )
+            if self.accelerator.is_main_process:
+                manifest = build_reproducibility_manifest(
+                    self.model,
+                    model_family=self.model.model_family,
+                    model_revision_or_path=cfg.llm.cfg_path,
+                    revision=revision,
+                    memory_token_ids=getattr(
+                        self.model, "memory_token_ids", ()
+                    ),
+                    hidden_size=int(cfg.llm.hidden_dim),
+                )
+                manifest["experiment_contract"] = {
+                    "rng_seed": int(cfg.rng_seed),
+                    "visual_size": OmegaConf.to_container(
+                        cfg.data.visual_size, resolve=True
+                    ),
+                    "training_datasets": list(
+                        cfg.task.leomix.LeoMix.mix.vln
+                    ),
+                    "evaluation_splits": {
+                        name: task_cfg.args.split
+                        for name, task_cfg in cfg.task.get("vlnce", {}).items()
+                    },
+                    "memory_token_num": (
+                        int(cfg.llm.mem_module.memory_token_num)
+                        if self.model.use_mem
+                        else 0
+                    ),
+                    "frame_max_tokens_num": (
+                        int(cfg.llm.mem_module.frame_max_tokens_num)
+                        if self.model.use_mem
+                        else 0
+                    ),
+                    "streamvggt_checkpoint": (
+                        hash_artifact_file(cfg.vision3d.ckpt_path)
+                        if self.model.use_vggt
+                        else None
+                    ),
+                    "streamvggt_input_grid_hw": (
+                        list(cfg.vision3d.input_grid_hw)
+                        if self.model.use_vggt
+                        and cfg.vision3d.get("input_grid_hw", None) is not None
+                        else None
+                    ),
+                }
+                manifest_path = write_json_atomic(
+                    os.path.join(self.exp_dir, "reproducibility.json"),
+                    manifest,
+                )
+                logger.info(
+                    f"Saved reproducibility manifest to {manifest_path}"
+                )
+            self.accelerator.wait_for_everyone()
 
         # group optim params
         # optim_params = self.get_grouped_params(learnable_named_params, cfg)
         if cfg.llm.lora.flag:
-            optim_params = list(learnable_named_params.values())
+            optim_params = build_lora_optimizer_params(
+                learnable_named_params,
+                model_family=self.model.model_family,
+                use_mem=self.model.use_mem,
+            )
         else:
             optim_params = self.get_grouped_params(learnable_named_params, cfg)
 
@@ -484,6 +607,11 @@ class LeoTrainer():
         for k, v in data_dict.items():
             if k.startswith('loss_'):
                 loss_dict[k] = self.accelerator.gather_for_metrics(v).mean()
+        for key in ("visual_token_count", "memory_token_count"):
+            if key in data_dict:
+                loss_dict[key] = self.accelerator.gather_for_metrics(
+                    data_dict[key]
+                ).float().mean()
 
         return loss_dict
 
@@ -507,6 +635,8 @@ class LeoTrainer():
         checkpoint_due = False
         validation_due = False
         active_batches = min(len(loader), 501) if self.debug else len(loader)
+        if self.max_train_batches is not None:
+            active_batches = min(active_batches, self.max_train_batches)
 
         for i, data_dict in enumerate(loader):
             if i >= active_batches:

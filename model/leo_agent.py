@@ -9,15 +9,17 @@ from peft import LoraConfig, get_peft_model
 from torch.distributed import get_rank
 
 from model.qwen.modeling_qwen3_vl import (
-    Qwen3VLForConditionalGeneration,
-    Qwen3VLForConditionalGeneration_VGGT,
     VGGTEmbeddingMerger,
     VGGTEmbeddingMergerCamera,
     VGGTEmbeddingMergerConfig,
 )
-from model.qwen.modeling_qwen3_vl_mem import Qwen3VLForConditionalGeneration_Mem
-from model.qwen.modeling_qwen3_vl_mem_vggt import Qwen3VLForConditionalGeneration_Mem_VGGT
-from model.qwen.processing_qwen3_vl import Qwen3VLProcessor
+from model.qwen.factory import (
+    QWEN2_5_VL,
+    build_model,
+    build_processor,
+    initialize_memory_tokens,
+    resolve_model_family,
+)
 from model.streamvggt.models.streamvggt import StreamVGGT
 from model.utils import disabled_train
 from model.memory import ToMeMemoryBank
@@ -65,36 +67,29 @@ class LeoAgent(nn.Module):
         super().__init__()
         self.max_out_len = cfg.llm.max_out_len
         self.model_input_keys = list(BASE_MODEL_INPUT_KEYS)
+        self.model_family = resolve_model_family(cfg)
+        self.use_vggt = 'vggt' in cfg.vision3d.name.lower()
+        self.use_mem = cfg.llm.get("mem_module", None) is not None
+        if self.model_family == QWEN2_5_VL:
+            self.model_input_keys.append('second_per_grid_ts')
 
-        llm_cfg_path = cfg.llm.cfg_path
         model_kwargs = {}
         if getattr(cfg.llm, 'torch_dtype', None):
             model_kwargs['dtype'] = torch_dtype_map[cfg.llm.torch_dtype]
         if getattr(cfg.llm, 'attn_implementation', None):
             model_kwargs['attn_implementation'] = cfg.llm.attn_implementation
 
-        self.processor = Qwen3VLProcessor.from_pretrained(
-            llm_cfg_path, padding_side=getattr(cfg.llm, 'padding_side', 'left')
+        self.processor = build_processor(cfg)
+        self.model = build_model(
+            cfg,
+            use_mem=self.use_mem,
+            use_vggt=self.use_vggt,
+            **model_kwargs,
         )
-        if 'vggt' in cfg.vision3d.name.lower():
-            self.use_vggt = True
-            if cfg.llm.get("mem_module", None):
-                self.use_mem = True
-                self.model = Qwen3VLForConditionalGeneration_Mem_VGGT.from_pretrained(llm_cfg_path, **model_kwargs)
-                self.build_mem_modules(cfg)
-            else:
-                self.use_mem = False
-                self.model = Qwen3VLForConditionalGeneration_VGGT.from_pretrained(llm_cfg_path, **model_kwargs)
-            self.build_vggt_modules(cfg)
-        elif cfg.llm.get("mem_module", None):
-            self.use_vggt = False
-            self.use_mem = True
-            self.model = Qwen3VLForConditionalGeneration_Mem.from_pretrained(llm_cfg_path, **model_kwargs)
+        if self.use_mem:
             self.build_mem_modules(cfg)
-        else:
-            self.use_vggt = False
-            self.use_mem = False
-            self.model = Qwen3VLForConditionalGeneration.from_pretrained(llm_cfg_path, **model_kwargs)
+        if self.use_vggt:
+            self.build_vggt_modules(cfg)
 
         if self.use_vggt or self.use_mem:
             self.model_input_keys.extend(["episode_id", "clip_id"])
@@ -129,7 +124,9 @@ class LeoAgent(nn.Module):
                 p.requires_grad = True
             elif "embed_tokens" in n and self.use_mem:
                 p.requires_grad = True
-                p.register_hook(self.make_grad_mask_hook(slice(None, -3)))
+                p.register_hook(
+                    self.make_memory_embedding_grad_hook(self.memory_token_ids)
+                )
             elif 'vggt_lambda' in n:
                 p.requires_grad = True
             else:
@@ -155,9 +152,29 @@ class LeoAgent(nn.Module):
                 "Initialized memory-module parameters and buffers with dtype "
                 f"{memory_param_dtype}"
             )
-        self.processor.__init_memory__(cfg.llm.mem_module.memory_token_num)
-        self.model.resize_token_embeddings(len(self.processor.tokenizer))
-        self.model.model.memory_token_id = self.processor.tokenizer.memory_token_id
+        self.memory_token_ids = initialize_memory_tokens(
+            self.processor,
+            int(cfg.llm.mem_module.memory_token_num),
+            getattr(self, "model_family", "qwen3_vl"),
+        )
+        if getattr(self, "model_family", "qwen3_vl") == QWEN2_5_VL:
+            embedding_rows = self.model.get_input_embeddings().num_embeddings
+            invalid_ids = [
+                token_id
+                for token_id in self.memory_token_ids
+                if token_id >= embedding_rows
+            ]
+            if invalid_ids:
+                raise ValueError(
+                    "Qwen2.5 Memory token IDs exceed the official embedding "
+                    f"table ({embedding_rows} rows): {invalid_ids}. The official "
+                    "152064-row table must not be resized or shrunk."
+                )
+        else:
+            # Preserve the historical Qwen3 path, whose vendored tokenizer
+            # appends the three Memory rows beyond the original table.
+            self.model.resize_token_embeddings(len(self.processor.tokenizer))
+        self.model.model.memory_token_id = self.memory_token_ids[1]
         self.model.model.memory_merge_vggt_feat = getattr(cfg.llm.mem_module, 'memory_merge_vggt_feat', False)
         self.model.model.visual_obs_mask_ratio_nav = getattr(cfg.llm.mem_module, 'visual_obs_mask_ratio_nav', 0.0)
         self.model.model.visual_obs_mask_ratio_aux = getattr(cfg.llm.mem_module, 'visual_obs_mask_ratio_aux', 1.0)
@@ -167,6 +184,14 @@ class LeoAgent(nn.Module):
         if 'stream' not in cfg.vision3d.name.lower():
             raise ValueError(
                 f"Only StreamVGGT is supported, got vision3d.name={cfg.vision3d.name!r}"
+            )
+        if self.model_family == QWEN2_5_VL and (
+            str(cfg.vision3d.merger_type).lower() != "camera"
+            or str(cfg.vision3d.fusion_op).lower() != "add"
+        ):
+            raise ValueError(
+                "Qwen2.5 Full MemVLN is locked to the existing "
+                "VGGTEmbeddingMergerCamera with fusion_op=add."
             )
         self.model.model.vggt = StreamVGGT()
         self.model.model.vggt.stream = True
@@ -274,6 +299,17 @@ class LeoAgent(nn.Module):
             return new_grad
         return grad_mask_hook
 
+    def make_memory_embedding_grad_hook(self, memory_token_ids):
+        """Keep gradients only for the three dynamically resolved Memory rows."""
+        memory_token_ids = tuple(int(token_id) for token_id in memory_token_ids)
+
+        def grad_mask_hook(grad):
+            new_grad = torch.zeros_like(grad)
+            new_grad[list(memory_token_ids)] = grad[list(memory_token_ids)]
+            return new_grad
+
+        return grad_mask_hook
+
     @cached_property
     def dtype(self):
         return next(self.parameters()).dtype
@@ -358,7 +394,9 @@ class LeoAgent(nn.Module):
             else:
                 is_aux.append(False)
 
-        outputs = self.model(**inputs, labels=None, is_aux=is_aux)
+        if self.use_mem:
+            inputs['is_aux'] = is_aux
+        outputs = self.model(**inputs, labels=None)
         logits = outputs.logits
 
         sample_weight = data_dict.get('sample_weight', None)
@@ -383,6 +421,17 @@ class LeoAgent(nn.Module):
         num_beams=1,
         num_return_sequences=1,
     ):
+        if (
+            getattr(self, "model_family", None) == QWEN2_5_VL
+            and getattr(self, "use_mem", False)
+            and getattr(self, "use_vggt", False)
+        ):
+            if do_sample or num_beams != 1 or num_return_sequences != 1:
+                raise ValueError(
+                    "Qwen2.5 Full MemVLN generation supports greedy decoding "
+                    "only (do_sample=False, num_beams=1, "
+                    "num_return_sequences=1)."
+                )
         inputs = {}
         for k in self.model_input_keys:
             if k in data_dict:

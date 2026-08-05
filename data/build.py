@@ -6,6 +6,11 @@ from fvcore.common.registry import Registry
 from torch.utils.data import DataLoader
 
 from common.misc import default_collate
+from model.qwen.factory import (
+    apply_chat_template,
+    count_multimodal_tokens,
+    mask_labels_for_last_assistant,
+)
 from model.streamvggt.processing import (
     build_online_vggt_input,
     resolve_dense_vggt_input,
@@ -22,12 +27,19 @@ def get_dataset_leo(cfg, split, dataset_name):
     return dataset
 
 
-def make_collate_fn_qwen(processor, use_vggt=False, dense_vggt_input=False):
+def make_collate_fn_qwen(
+    processor,
+    model_family="qwen3_vl",
+    use_vggt=False,
+    dense_vggt_input=False,
+):
 
     def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         messages = [data_dict.pop('messages') for data_dict in batch]
-        inputs = processor.apply_chat_template(
+        inputs = apply_chat_template(
+            processor,
             messages,
+            model_family,
             tokenize=True,
             add_generation_prompt=False if len(messages[0]) > 1 else True,
             return_dict=True,
@@ -42,13 +54,14 @@ def make_collate_fn_qwen(processor, use_vggt=False, dense_vggt_input=False):
                 dense_history=dense_vggt_input,
             )
 
-        labels = inputs['input_ids'].clone()
-        for i in range(len(labels)):
-            # hardcode <|im_start|>, followed by `assistant` and `\n`
-            output_start_index = (labels[i] == 151644).nonzero()[-1, 0] + 3
-            labels[i, :output_start_index] = -100
-        labels[labels == processor.tokenizer.pad_token_id] = -100
+        labels = mask_labels_for_last_assistant(
+            inputs['input_ids'],
+            processor.tokenizer,
+            attention_mask=inputs.get('attention_mask'),
+        )
         inputs.update({'labels': labels})
+        if model_family == "qwen2_5_vl":
+            inputs.update(count_multimodal_tokens(inputs['input_ids'], processor))
 
         inputs.update(default_collate(batch))
 
@@ -68,7 +81,12 @@ def build_dataloader_leo(cfg, split, dataset_name, dataloader_args):
         sampler = None
     return DataLoader(
         dataset, batch_size = dataloader_args.batchsize, num_workers = dataloader_args.num_workers,
-        collate_fn = make_collate_fn_qwen(dataset.processor, use_vggt=use_vggt, dense_vggt_input=dense_vggt_input), pin_memory = True,
+        collate_fn = make_collate_fn_qwen(
+            dataset.processor,
+            model_family=dataset.model_family,
+            use_vggt=use_vggt,
+            dense_vggt_input=dense_vggt_input,
+        ), pin_memory = True,
         shuffle = True if split == 'train' and sampler is None else False, drop_last = True if split == 'train' else False,
         sampler=sampler
     )

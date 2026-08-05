@@ -17,6 +17,43 @@ from model.leo_agent import LeoAgent, resolve_memory_param_dtype
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _load_smoke_training_helpers():
+    trainer_path = ROOT / "trainer" / "leo_trainer.py"
+    tree = ast.parse(
+        trainer_path.read_text(encoding="utf-8"),
+        filename=str(trainer_path),
+    )
+    helper_names = {
+        "configure_gradient_checkpointing",
+        "resolve_max_train_batches",
+    }
+    selected_nodes = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in helper_names
+    ]
+    namespace = {}
+    exec(
+        compile(
+            ast.fix_missing_locations(
+                ast.Module(body=selected_nodes, type_ignores=[])
+            ),
+            str(trainer_path),
+            "exec",
+        ),
+        namespace,
+    )
+    return (
+        namespace["configure_gradient_checkpointing"],
+        namespace["resolve_max_train_batches"],
+    )
+
+
+configure_gradient_checkpointing, resolve_max_train_batches = (
+    _load_smoke_training_helpers()
+)
+
+
 class _Tokenizer:
     memory_token_id = 151669
 
@@ -136,6 +173,34 @@ class MemoryParameterDtypeTests(unittest.TestCase):
 
 
 class GradientAccumulationRegressionTests(unittest.TestCase):
+    def test_smoke_batch_limit_is_optional_and_validated(self):
+        self.assertIsNone(resolve_max_train_batches({}))
+        self.assertEqual(
+            resolve_max_train_batches({"max_train_batches": 1}),
+            1,
+        )
+        for invalid in (True, 0, -1, "1"):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises((TypeError, ValueError)):
+                    resolve_max_train_batches({"max_train_batches": invalid})
+
+    def test_gradient_checkpointing_is_opt_in_and_disables_cache(self):
+        transformer_model = SimpleNamespace(
+            gradient_checkpointing_enable=mock.Mock(),
+            config=SimpleNamespace(use_cache=True),
+        )
+        wrapper = SimpleNamespace(model=transformer_model)
+
+        self.assertFalse(configure_gradient_checkpointing(wrapper, False))
+        transformer_model.gradient_checkpointing_enable.assert_not_called()
+        self.assertTrue(transformer_model.config.use_cache)
+
+        self.assertTrue(configure_gradient_checkpointing(wrapper, True))
+        transformer_model.gradient_checkpointing_enable.assert_called_once_with(
+            gradient_checkpointing_kwargs={"use_reentrant": False}
+        )
+        self.assertFalse(transformer_model.config.use_cache)
+
     def test_unprepared_loader_syncs_the_final_partial_accumulation_window(self):
         trainer_path = ROOT / "trainer" / "leo_trainer.py"
         tree = ast.parse(

@@ -6,7 +6,13 @@ import numpy as np
 from typing import Any
 from common.vln_prompt import resolve_memory_prompt
 from data.data_utils import dict_to_cuda, merge_actions
-from model.qwen.processing_qwen3_vl import Qwen3VLProcessor
+from model.qwen.factory import (
+    apply_chat_template,
+    build_processor,
+    configure_processor,
+    initialize_memory_tokens,
+    resolve_model_family,
+)
 from model.streamvggt.processing import (
     build_online_vggt_input,
     resolve_dense_vggt_input,
@@ -27,26 +33,21 @@ class VLNEvaluator:
         except StopIteration as exc:
             raise ValueError("Cannot infer the real-world device from an empty model.") from exc
         self.model = model
-        # For Qwen3
-        self.processor = Qwen3VLProcessor.from_pretrained(
-            cfg.llm.cfg_path, padding_side=getattr(cfg.llm, "padding_side", "left"),
+        self.model_family = resolve_model_family(cfg)
+        self.processor = build_processor(
+            cfg,
             min_frames=1, max_frames=cfg.data.vln.max_num_frames
         )
-        self.processor.video_processor.do_sample_frames = False
-        self.processor.image_processor.size = {
-            'shortest_edge': cfg.data.visual_size.image.shortest_edge,
-            'longest_edge': cfg.data.visual_size.image.longest_edge,
-        }
-        self.processor.video_processor.size = {
-            'shortest_edge': cfg.data.visual_size.video.shortest_edge,
-            'longest_edge': cfg.data.visual_size.video.longest_edge,
-        }
         self.use_vggt = 'vggt' in cfg.vision3d.name.lower()
-        self.processor.fix_video_preprocess(use_vggt=self.use_vggt)
+        configure_processor(self.processor, cfg, use_vggt=self.use_vggt)
 
         self.use_mem = True if cfg.llm.get("mem_module", None) is not None else False
         if self.use_mem:
-            self.processor.__init_memory__(cfg.llm.mem_module.memory_token_num)
+            initialize_memory_tokens(
+                self.processor,
+                int(cfg.llm.mem_module.memory_token_num),
+                self.model_family,
+            )
 
         self.navigation_prompt_v1 = "You are a navigation robot to perform the instruction: {instruction} " + \
                                     "{memory_prompt}" + \
@@ -251,8 +252,10 @@ class VLNEvaluator:
         else:
             raise ValueError(f"Invalid navigation prompt format: {self.prompt_format}")
         
-        data_dict = self.processor.apply_chat_template(
+        data_dict = apply_chat_template(
+            self.processor,
             messages,
+            getattr(self, "model_family", "qwen3_vl"),
             tokenize=True,
             add_generation_prompt=True,
             return_dict=True,

@@ -13,7 +13,12 @@ from tqdm import tqdm
 from PIL import Image, ImageOps
 
 from common.vln_prompt import resolve_memory_prompt
-from model.qwen.processing_qwen3_vl import Qwen3VLProcessor
+from model.qwen.factory import (
+    build_processor,
+    configure_processor,
+    initialize_memory_tokens,
+    resolve_model_family,
+)
 from .build import DATASET_REGISTRY
 from .data_utils import calc_relative_pos_and_yaw, merge_actions
 
@@ -23,15 +28,13 @@ class LeoBase(Dataset):
     def __init__(self, cfg, split):
         super().__init__()
         self.num_frames = getattr(cfg.data, 'num_frames', 32)
-        self.processor = Qwen3VLProcessor.from_pretrained(
-            cfg.llm.cfg_path, padding_side=getattr(cfg.llm, 'padding_side', 'left'),
+        self.model_family = resolve_model_family(cfg)
+        self.processor = build_processor(
+            cfg,
             min_frames=1, max_frames=self.num_frames,
         )
-        self.processor.image_processor.size = OmegaConf.to_container(cfg.data.visual_size.image)
-        self.processor.video_processor.size = OmegaConf.to_container(cfg.data.visual_size.video)
-        self.processor.video_processor.do_sample_frames = False
         self.use_vggt = 'vggt' in cfg.vision3d.name.lower()
-        self.processor.fix_video_preprocess(use_vggt=self.use_vggt)
+        configure_processor(self.processor, cfg, use_vggt=self.use_vggt)
 
 
 
@@ -68,7 +71,15 @@ class VLNBase(LeoBase):
                 f"realworld.image_resize_size must be [width, height], got {realworld_resize_size}"
             self.realworld_resize_size = tuple(int(v) for v in realworld_resize_size)
         if self.memory_prompt:
-            self.processor.__init_memory__(cfg.llm.mem_module.memory_token_num)
+            if cfg.llm.get("mem_module", None) is None:
+                raise ValueError(
+                    "data.vln.memory_prompt requires llm.mem_module."
+                )
+            initialize_memory_tokens(
+                self.processor,
+                int(cfg.llm.mem_module.memory_token_num),
+                self.model_family,
+            )
         logger.info(f"Loading {self.__class__.__name__} {split}-set annotations")
         self.meta_data, self.num_demos = self.load_anno(cfg.data.vln)
         if split == 'train' and getattr(cfg.data, 'sort_scene', False):
