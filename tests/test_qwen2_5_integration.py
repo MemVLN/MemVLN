@@ -122,9 +122,15 @@ class FakeTokenizer:
         return self.ids.get(token)
 
     def encode(self, text, add_special_tokens=False):
-        if text != "<|im_start|>assistant\n" or add_special_tokens:
+        if text != "<|im_start|>assistant" or add_special_tokens:
             raise AssertionError("Unexpected tokenizer.encode call")
-        return [7, 8, 9]
+        return [7, 8]
+
+    @staticmethod
+    def decode(token_ids, skip_special_tokens=False):
+        del skip_special_tokens
+        pieces = {9: "\n", 27: "\n\n"}
+        return "".join(pieces.get(token_id, f"<{token_id}>") for token_id in token_ids)
 
 
 class FactoryAndConfigTests(unittest.TestCase):
@@ -333,11 +339,37 @@ class MemoryAndLabelGlueTests(unittest.TestCase):
         torch.testing.assert_close(labels[0, 11:], input_ids[0, 11:])
         self.assertTrue(torch.all(labels[1, :9] == -100))
         torch.testing.assert_close(labels[1, 9:], input_ids[1, 9:])
-        with self.assertRaisesRegex(ValueError, "assistant header"):
+        with self.assertRaisesRegex(ValueError, "assistant role prefix"):
             mask_labels_for_last_assistant(
                 torch.tensor([[1, 2, 3, 4]]),
                 tokenizer,
             )
+
+    def test_dynamic_label_mask_accepts_merged_header_newline(self):
+        tokenizer = FakeTokenizer()
+        input_ids = torch.tensor(
+            [
+                [1, 2, 7, 8, 27, 41, 42, 43],
+                [0, 0, 1, 7, 8, 27, 51, 52],
+            ]
+        )
+        attention_mask = torch.tensor(
+            [
+                [1, 1, 1, 1, 1, 1, 1, 1],
+                [0, 0, 1, 1, 1, 1, 1, 1],
+            ]
+        )
+
+        labels = mask_labels_for_last_assistant(
+            input_ids,
+            tokenizer,
+            attention_mask=attention_mask,
+        )
+
+        self.assertTrue(torch.all(labels[0, :5] == -100))
+        torch.testing.assert_close(labels[0, 5:], input_ids[0, 5:])
+        self.assertTrue(torch.all(labels[1, :6] == -100))
+        torch.testing.assert_close(labels[1, 6:], input_ids[1, 6:])
 
     def test_chat_template_adds_only_qwen25_timing_and_memory_glue(self):
         qwen25_processor = SimpleNamespace(
@@ -742,6 +774,66 @@ class LocalOfficialProcessorIntegrationTests(unittest.TestCase):
             dense_history=True,
         )
         self.assertEqual(tuple(vggt_input[0].shape), (3, 3, 420, 560))
+
+    def test_official_label_mask_handles_leading_newline(self):
+        assistant_prefix = self.processor.tokenizer.encode(
+            "<|im_start|>assistant",
+            add_special_tokens=False,
+        )
+
+        for output_gt in ("turn left", "\nturn left", "\n\nturn left"):
+            with self.subTest(output_gt=repr(output_gt)):
+                messages = [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "Next action?"}],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": output_gt}],
+                    },
+                ]
+                inputs = apply_chat_template(
+                    self.processor,
+                    messages,
+                    self.cfg,
+                    tokenize=True,
+                    add_generation_prompt=False,
+                    return_dict=True,
+                    return_tensors="pt",
+                )
+                labels = mask_labels_for_last_assistant(
+                    inputs["input_ids"],
+                    self.processor.tokenizer,
+                    attention_mask=inputs.get("attention_mask"),
+                )
+
+                row = inputs["input_ids"][0].tolist()
+                starts = [
+                    index
+                    for index in range(len(row) - len(assistant_prefix) + 1)
+                    if row[index:index + len(assistant_prefix)] == assistant_prefix
+                ]
+                self.assertTrue(starts)
+                separator_index = starts[-1] + len(assistant_prefix)
+                separator_text = self.processor.tokenizer.decode(
+                    [row[separator_index]],
+                    skip_special_tokens=False,
+                )
+                self.assertTrue(separator_text.startswith("\n"))
+                if output_gt.startswith("\n"):
+                    self.assertGreaterEqual(separator_text.count("\n"), 2)
+
+                self.assertTrue(
+                    torch.all(labels[0, :separator_index + 1] == -100)
+                )
+                supervised_ids = labels[0][labels[0] != -100].tolist()
+                supervised_text = self.processor.tokenizer.decode(
+                    supervised_ids,
+                    skip_special_tokens=False,
+                )
+                self.assertIn("turn left", supervised_text)
+                self.assertIn("<|im_end|>", supervised_text)
 
     def test_real_checkpoint_index_matches_full_class_after_official_key_conversion(self):
         config = AutoConfig.from_pretrained(LOCAL_QWEN25)

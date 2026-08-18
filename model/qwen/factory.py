@@ -427,8 +427,10 @@ def mask_labels_for_last_assistant(
 ) -> torch.Tensor:
     """Build labels supervised only after the last assistant header.
 
-    The header token IDs are obtained from the active tokenizer instead of
-    relying on Qwen-version-specific numeric IDs.
+    Qwen tokenizers can merge the template's header newline with leading
+    whitespace from the assistant response. Match the stable assistant role
+    prefix and mask the following separator token instead of assuming that
+    ``"<|im_start|>assistant\n"`` always has one fixed tokenization.
     """
     if not isinstance(input_ids, torch.Tensor) or input_ids.ndim not in (1, 2):
         raise TypeError("input_ids must be a rank-1 or rank-2 torch.Tensor.")
@@ -449,36 +451,72 @@ def mask_labels_for_last_assistant(
     else:
         batch_attention_mask = None
 
-    header_ids = tokenizer.encode(
-        "<|im_start|>assistant\n", add_special_tokens=False
+    assistant_prefix_ids = tokenizer.encode(
+        "<|im_start|>assistant", add_special_tokens=False
     )
-    if not header_ids:
-        raise ValueError("Tokenizer produced an empty assistant header.")
-    header = torch.tensor(
-        header_ids, dtype=batch_input_ids.dtype, device=batch_input_ids.device
+    if not assistant_prefix_ids:
+        raise ValueError("Tokenizer produced an empty assistant role prefix.")
+    assistant_prefix = torch.tensor(
+        assistant_prefix_ids,
+        dtype=batch_input_ids.dtype,
+        device=batch_input_ids.device,
     )
-    if batch_input_ids.shape[1] < header.numel():
-        raise ValueError("Input sequence is shorter than the assistant header.")
+    if batch_input_ids.shape[1] <= assistant_prefix.numel():
+        raise ValueError(
+            "Input sequence is shorter than the assistant role prefix and "
+            "its separator token."
+        )
 
     labels = batch_input_ids.clone()
-    header_size = int(header.numel())
+    prefix_size = int(assistant_prefix.numel())
     for sample_index, row in enumerate(batch_input_ids):
-        matches = row.unfold(0, header_size, 1).eq(header).all(dim=1)
+        matches = (
+            row.unfold(0, prefix_size, 1)
+            .eq(assistant_prefix)
+            .all(dim=1)
+        )
         if batch_attention_mask is not None:
             active_windows = (
                 batch_attention_mask[sample_index]
                 .bool()
-                .unfold(0, header_size, 1)
+                .unfold(0, prefix_size, 1)
                 .all(dim=1)
             )
             matches &= active_windows
         starts = matches.nonzero(as_tuple=False).flatten()
         if starts.numel() == 0:
             raise ValueError(
-                "Could not find an assistant header in tokenized sample "
+                "Could not find an assistant role prefix in tokenized sample "
                 f"{sample_index}."
             )
-        output_start = int(starts[-1].item()) + header_size
+        separator_index = None
+        for start in reversed(starts.tolist()):
+            candidate_index = int(start) + prefix_size
+            if candidate_index >= row.numel():
+                continue
+            if (
+                batch_attention_mask is not None
+                and not bool(batch_attention_mask[sample_index, candidate_index])
+            ):
+                continue
+            separator_text = tokenizer.decode(
+                [int(row[candidate_index].item())],
+                skip_special_tokens=False,
+            )
+            if separator_text.startswith("\n"):
+                separator_index = candidate_index
+                break
+        if separator_index is None:
+            raise ValueError(
+                "Could not find an assistant role prefix followed by a "
+                f"line separator in tokenized sample {sample_index}."
+            )
+
+        # The first token after the role prefix contains the chat-template
+        # newline. It can also contain leading response whitespace (for
+        # example token 271 represents ``\n\n`` in Qwen2.5), which cannot be
+        # split at token granularity and is intentionally excluded from loss.
+        output_start = separator_index + 1
         labels[sample_index, :output_start] = ignore_index
 
     if batch_attention_mask is not None:
