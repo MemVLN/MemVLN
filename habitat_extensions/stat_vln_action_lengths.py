@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize action and trajectory lengths for MP3D R2R and RxR-v2 data.
+"""Summarize action and trajectory lengths for MP3D R2R and RxR data.
 
 This utility intentionally uses only the Python standard library so it can be
 run without importing the training stack.
@@ -103,6 +103,11 @@ def _read_default_anno_dir(config_path):
         raise AnnotationFormatError(
             f"Could not find a non-empty top-level annotation_base in {config_path}"
         )
+
+    env_prefix = "${oc.env:MEMVLN_DATA_ROOT,"
+    if annotation_base.startswith(env_prefix) and annotation_base.endswith("}"):
+        default_root = annotation_base[len(env_prefix):-1]
+        annotation_base = os.environ.get("MEMVLN_DATA_ROOT", default_root)
 
     expanded = Path(os.path.expandvars(annotation_base)).expanduser()
     if "$" in str(expanded):
@@ -304,8 +309,13 @@ def _load_r2r(anno_dir, split):
     return records
 
 
-def _load_rxr_v2(anno_dir, split):
-    anno_path = Path(anno_dir) / "rxr" / f"{split}_v2" / "annotations.json"
+def _rxr_cache_split_dir(anno_dir, split):
+    """Return the legacy on-disk directory used by the processed RxR cache."""
+    return Path(anno_dir) / "rxr" / f"{split}_v2"
+
+
+def _load_rxr(anno_dir, split):
+    anno_path = _rxr_cache_split_dir(anno_dir, split) / "annotations.json"
     anno_data = _require_list(_load_json(anno_path), f"{anno_path} episodes")
 
     records = []
@@ -319,7 +329,7 @@ def _load_rxr_v2(anno_dir, split):
         merged_actions, _ = merge_actions(actions)
         records.append(
             {
-                "dataset": "mp3d_rxr_v2",
+                "dataset": "mp3d_rxr",
                 "episode_id": f"rxr-{episode_id}",
                 "trajectory_id": trajectory_id,
                 "raw_len": len(actions),
@@ -387,7 +397,7 @@ def _validate_thresholds(thresholds):
 
 def _build_parser():
     parser = argparse.ArgumentParser(
-        description="Compute action-length statistics for MP3D R2R and RxR-v2."
+        description="Compute action-length statistics for MP3D R2R and RxR."
     )
     parser.add_argument(
         "--anno-dir",
@@ -463,7 +473,7 @@ def main(argv=None):
         if "r2r" in args.datasets:
             records.extend(_load_r2r(anno_dir, args.split))
         if "rxr" in args.datasets:
-            records.extend(_load_rxr_v2(anno_dir, args.split))
+            records.extend(_load_rxr(anno_dir, args.split))
         if not records:
             raise AnnotationFormatError(
                 "The selected annotation files contain no episodes"

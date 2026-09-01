@@ -13,7 +13,10 @@ from habitat_baselines.config.default import get_config as get_habitat_config
 from hydra.core.global_hydra import GlobalHydra
 from habitat_extensions import measures
 from common.misc import dict_to_cuda
-from common.vln_prompt import resolve_memory_prompt
+from common.vln_prompt import (
+    build_navigation_user_message,
+    resolve_memory_prompt,
+)
 from evaluator.build import EVALUATOR_REGISTRY
 from evaluator.vlnce_actions import STOP_ACTION, parse_navigation_action
 from evaluator.vlnce_rollout import (
@@ -105,11 +108,7 @@ class VLNCESplitEvaluator():
         self.dense_vggt_input = (
             resolve_dense_vggt_input(cfg.data.vln) if self.use_vggt else False
         )
-        self.prompt_format = cfg.data.vln.prompt_format
         self.memory_prompt = resolve_memory_prompt(cfg.data.vln.memory_prompt)
-        
-        self.navigation_prompt_v1 = "You are a navigation robot to perform the instruction: {instruction} {memory_prompt}{act_hist_prompt}What is your next action?"
-        self.navigation_prompt_v2 = "{memory_prompt}{visual_prompt}You are a navigation robot to perform the instruction: {instruction} {act_hist_prompt}What is your next action?"
         
         self.reset()
 
@@ -256,75 +255,13 @@ class VLNCESplitEvaluator():
                             raise NotImplementedError(f"obs_hist_sample: {self.obs_hist_sample}")
                         input_image_list = [self.hist_rgb_list[idx] for idx in obs_hist_sample]
 
-                        if self.prompt_format == 'v1':
-                            input_txt = self.navigation_prompt_v1.format(
-                                instruction=episode_instruction,
-                                memory_prompt=self.memory_prompt,
-                                act_hist_prompt=act_hist_prompt
-                            )
-                            messages = [
-                                {
-                                    "role": "user",
-                                    "content": [
-                                        {
-                                            "type": "video",
-                                            "video": input_image_list,
-                                        },
-                                        {
-                                            "type": "text",
-                                            "text": input_txt
-                                        },
-                                    ],
-                                }
-                            ]
-                        elif self.prompt_format == 'v2':
-                            visual_input = []
-                            # split into history and current observation
-                            if len(input_image_list) > 1:
-                                # currently not supported, as max_num_frames is set to 1 -> len(video) = 1
-                                visual_input.extend([
-                                    {
-                                        "type": "text",
-                                        "text": "Historical observation: ",
-                                    },
-                                    {
-                                        "type": "video",
-                                        "video": input_image_list[:-1],
-                                    },
-                                ])
-
-                            visual_input.extend([
-                                {
-                                    "type": "text",
-                                    "text": "Current observation: ",
-                                },
-                                {
-                                    "type": "image",
-                                    "image": input_image_list[-1],
-                                },
-                            ])
-                            input_txt = self.navigation_prompt_v2.split('{visual_prompt}')[-1].format(
-                                instruction=episode_instruction,
-                                act_hist_prompt=act_hist_prompt,
-                            )
-                            messages = [
-                                {
-                                    "role": "user",
-                                    "content": [
-                                        {
-                                            "type": "text",
-                                            "text": self.memory_prompt,
-                                        },
-                                        *visual_input,
-                                        {
-                                            "type": "text",
-                                            "text": input_txt,
-                                        },
-                                    ],
-                                }
-                            ]
-                        else:
-                            raise ValueError(f"Invalid navigation prompt format: {self.prompt_format}")
+                        user_message, input_txt = build_navigation_user_message(
+                            self.memory_prompt,
+                            input_image_list,
+                            episode_instruction,
+                            act_hist_prompt,
+                        )
+                        messages = [user_message]
 
                         data_dict = self.processor.apply_chat_template(
                             messages,

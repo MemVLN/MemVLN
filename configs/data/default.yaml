@@ -1,4 +1,4 @@
-annotation_base: /share/generalvision/huangjiangyong/leo2_data
+annotation_base: ${oc.env:MEMVLN_DATA_ROOT,./datasets}
 
 sort_scene: True
 num_frames: 32
@@ -17,7 +17,6 @@ vln:
   merge_action: True
   max_act_hist: 0
   use_sub_inst: True
-  prompt_format: v2
   memory_prompt: True
   sample_step: 1
   num_future_steps: 1

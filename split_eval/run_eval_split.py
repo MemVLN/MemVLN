@@ -10,12 +10,12 @@ from accelerate import PartialState
 from datetime import datetime
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir) # Go up one level to 'LEO-R'
+project_root = os.path.dirname(current_dir)  # Repository root.
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from evaluator.vlnce_eval_split import VLNCESplitEvaluator
-from model.leo_agent import LeoAgent
+from model.memvln_agent import MemVLNAgent
 from common.misc import rgetattr
 from split_eval.checkpoint_utils import require_checkpoint_file
 
@@ -64,7 +64,7 @@ def main():
     device = torch.device("cuda:0")
     
     print("Building model...")
-    model = LeoAgent(cfg)
+    model = MemVLNAgent(cfg)
     
     print(f"Loading checkpoint: {checkpoint_path}")
     if checkpoint_path.suffix == ".safetensors":
@@ -94,7 +94,7 @@ def main():
     if not dataset_list:
         print("Warning: 'vlnce' key not found in cfg.task, trying to search")
         for task_key in cfg.task.keys():
-            if task_key in ['training', 'task_metrics_weights', 'leomix']:
+            if task_key in ['training', 'task_metrics_weights', 'dataset_mix']:
                 continue
             ds_keys = list(cfg.task[task_key].keys())
             if ds_keys:

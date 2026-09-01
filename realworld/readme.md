@@ -38,8 +38,7 @@ cd realworld
 python http_realworld_server.py \
   --config ../configs/realworld.yaml \
   llm.cfg_path=/home/wangyan/bigai/pretrained_weights/Qwen3-VL-4B-Instruct \
-  data.vln.memory_prompt=True \
-  data.vln.prompt_format=v2
+  data.vln.memory_prompt=True
 ```
 
 The server listens on port `5801` by default and exposes the `/eval_vln` endpoint.

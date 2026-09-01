@@ -1,6 +1,6 @@
 defaults:
   - data: default
-  - task: sft_r2r_rxr_v2_w_traj_sum_w_mem
+  - task: sft_r2r_rxr_w_traj_sum
   - llm: qwen3-4b-mem
   - vision3d: streamvggt
   - _self_
@@ -42,7 +42,7 @@ debug: False
 blind: False
 train_infer: False
 
-trainer: LeoTrainer
+trainer: MemVLNTrainer
 training:
   epochs: ${task.training.epochs}
   gradient_accumulation_steps: 32

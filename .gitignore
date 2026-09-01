@@ -8,6 +8,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+tests/
 build/
 develop-eggs/
 dist/
@@ -160,6 +161,10 @@ cython_debug/
 #.idea/
 
 # custom
+.DS_Store
+/_private/
+/output/
+/tmp/
 .vscode/
 jobs/
 outputs/

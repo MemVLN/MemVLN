@@ -7,8 +7,8 @@ task:
     epochs: 1
     dummy_lr_decay: False
 
-  leomix:
-    LeoMix:
+  dataset_mix:
+    VLNDatasetMix:
       mode: [train]
       mix:
         vln: [realworld]

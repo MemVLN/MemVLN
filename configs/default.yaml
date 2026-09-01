@@ -1,13 +1,13 @@
 defaults:
   - data: default
-  - task: sft_r2r_rxr_v2_w_traj_sum_w_mem
+  - task: sft_r2r_rxr_w_traj_sum
   - llm: qwen3-4b-mem
   - vision3d: streamvggt
   - _self_
 
 # exp general info
 name: Qwen3-VLNCE   # project name of wandb
-note: sft_r2r_rxr_v2_prompt_v2_memory_16frame_w_traj_sum_streamvggt_cache_feat
+note: sft_r2r_rxr_memory_16frame_w_traj_sum_streamvggt_cache_feat
 
 rng_seed: 42
 num_gpu: 8   # will be overrided by launch.py
@@ -41,7 +41,7 @@ inference:
   empty_cache_on_episode_end: False
   video_selection_seed: ${rng_seed}
 
-trainer: LeoTrainer
+trainer: MemVLNTrainer
 training:
   epochs: ${task.training.epochs}
   gradient_accumulation_steps: 1

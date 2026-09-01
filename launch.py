@@ -11,7 +11,7 @@ def parse_args():
                         help="Launch mode (submitit | accelerate | python)")
 
     # Slurm settings
-    parser.add_argument("--name", default="leo", type=str,
+    parser.add_argument("--name", default="memvln", type=str,
                         help="Name of the job")
     parser.add_argument("--run_file", default="run.py", type=str,
                         help="File position of launcher file")

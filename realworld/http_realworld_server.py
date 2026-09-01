@@ -19,7 +19,7 @@ from datetime import datetime
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from common.misc import rgetattr, CustomAccelerator
-from model import LeoAgent
+from model import MemVLNAgent
 from realworld.agent import VLNEvaluator
 
 
@@ -227,7 +227,7 @@ if __name__ == "__main__":
     )
 
     # Prepare model
-    model = LeoAgent(cfg)
+    model = MemVLNAgent(cfg)
 
     # Load checkpoint
     assert cfg.pretrained_ckpt_path != "", "Please provide a pretrained checkpoint path!"

@@ -1,1 +1,1 @@
-from .leo_trainer import LeoTrainer
+from .memvln_trainer import MemVLNTrainer

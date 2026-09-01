@@ -12,14 +12,24 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 from PIL import Image, ImageOps
 
-from common.vln_prompt import resolve_memory_prompt
+from common.vln_prompt import (
+    build_navigation_user_message,
+    build_trajectory_summary_user_message,
+    resolve_memory_prompt,
+)
 from model.qwen.processing_qwen3_vl import Qwen3VLProcessor
 from .build import DATASET_REGISTRY
 from .data_utils import calc_relative_pos_and_yaw, merge_actions
 
 logger = get_logger(__name__)
 
-class LeoBase(Dataset):
+
+def _rxr_cache_split_dir(anno_dir, split):
+    """Return the legacy on-disk directory used by the processed RxR cache."""
+    return os.path.join(anno_dir, 'rxr', f'{split}_v2')
+
+
+class VLNDatasetBase(Dataset):
     def __init__(self, cfg, split):
         super().__init__()
         self.num_frames = getattr(cfg.data, 'num_frames', 32)
@@ -35,13 +45,7 @@ class LeoBase(Dataset):
 
 
 
-class VLNBase(LeoBase):
-    navigation_prompt_v1 = "You are a navigation robot to perform the instruction: {instruction} " + \
-                           "{memory_prompt}" + \
-                           "{act_hist_prompt}What is your next action?"
-    navigation_prompt_v2 = "{memory_prompt}{visual_prompt}" + \
-                           "You are a navigation robot to perform the instruction: {instruction} " + \
-                           "{act_hist_prompt}What is your next action?"
+class VLNBase(VLNDatasetBase):
     vlnce_action_list = [
         "stop", 
         "move forward", 
@@ -59,7 +63,6 @@ class VLNBase(LeoBase):
         self.num_future_steps = cfg.data.vln.num_future_steps
         self.num_stop_steps = cfg.data.vln.num_stop_steps
         self.skip_merge_step_obs = cfg.data.vln.skip_merge_step_obs
-        self.prompt_format = cfg.data.vln.prompt_format
         realworld_cfg = getattr(cfg.data.vln, 'realworld', None)
         realworld_resize_size = getattr(realworld_cfg, 'image_resize_size', None)
         self.realworld_resize_size = None
@@ -120,75 +123,13 @@ class VLNBase(LeoBase):
         else:
             act_hist_prompt = ""
 
-        if self.prompt_format == 'v1':
-            input_txt = self.navigation_prompt_v1.format(
-                instruction=instruction,
-                memory_prompt=self.memory_prompt,
-                act_hist_prompt=act_hist_prompt,
-            )
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "video",
-                            "video": video_path,
-                        },
-                        {
-                            "type": "text",
-                            "text": input_txt,
-                        }
-                    ],
-                }
-            ]
-        elif self.prompt_format == 'v2':
-            visual_input = []
-            # split into history and current observation
-            if len(video_path) > 1:
-                # currently not supported, as max_num_frames is set to 1 -> len(video) = 1
-                visual_input.extend([
-                    {
-                        "type": "text",
-                        "text": "Historical observation: ",
-                    },
-                    {
-                        "type": "video",
-                        "video": video_path[:-1],
-                    },
-                ])
-
-            visual_input.extend([
-                {
-                    "type": "text",
-                    "text": "Current observation: ",
-                },
-                {
-                    "type": "image",
-                    "image": video_path[-1],
-                },
-            ])
-            input_txt = self.navigation_prompt_v2.split('{visual_prompt}')[-1].format(
-                instruction=instruction,
-                act_hist_prompt=act_hist_prompt,
-            )
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": self.memory_prompt,
-                        },
-                        *visual_input,
-                        {
-                            "type": "text",
-                            "text": input_txt,
-                        },
-                    ],
-                }
-            ]
-        else:
-            raise ValueError(f"Invalid navigation prompt format: {self.prompt_format}")
+        user_message, input_txt = build_navigation_user_message(
+            self.memory_prompt,
+            video_path,
+            instruction,
+            act_hist_prompt,
+        )
+        messages = [user_message]
 
         output_gt = ', '.join(pred_actions)
         if self.split == 'train':
@@ -349,7 +290,7 @@ class VLNMP3DR2R(VLNBase):
         return meta_data, num_demos
     
 
-class VLNMP3DRxRV2(VLNBase):
+class VLNMP3DRxR(VLNBase):
     def __init__(self, cfg, split):
         self.domain = 'MP3D'
         self.split = split
@@ -360,13 +301,14 @@ class VLNMP3DRxRV2(VLNBase):
         num_demos = 0
         anno_dir = data_cfg.anno_dir
 
-        anno_path = os.path.join(anno_dir, 'rxr', self.split + '_v2', 'annotations.json')
+        split_dir = _rxr_cache_split_dir(anno_dir, self.split)
+        anno_path = os.path.join(split_dir, 'annotations.json')
         with open(anno_path, 'r') as f:
             anno_data = json.load(f)
 
         aug_stop_steps = getattr(data_cfg, 'aug_stop_steps', 0)
         if aug_stop_steps > 0:
-            with open(os.path.join(anno_dir, 'rxr', self.split + '_v2', 'last_forward_steps.json')) as f:
+            with open(os.path.join(split_dir, 'last_forward_steps.json')) as f:
                 aug_stop_steps_dict = json.load(f)
         else:
             aug_stop_steps_dict = None
@@ -411,7 +353,7 @@ class VLNMP3DRxRV2(VLNBase):
                     raise NotImplementedError(f"obs_hist_sample: {self.obs_hist_sample}")
 
                 for hist_ind in obs_hist_sample:
-                    video_path.append(os.path.join(anno_dir, 'rxr', self.split + '_v2', str(traj_id), 'rgb', f'{hist_ind}.jpg'))
+                    video_path.append(os.path.join(split_dir, str(traj_id), 'rgb', f'{hist_ind}.jpg'))
 
                 for hist_ind in range(max(0, ind-self.max_act_hist), ind):
                     past_actions.append(all_actions[hist_ind])
@@ -433,11 +375,6 @@ class VLNMP3DRxRV2(VLNBase):
 
 
 class VLNTrajSumBase(VLNBase):
-    traj_sum_prompt_v1 = "You are a navigation robot. Given your observation history from the video, " + \
-                         "{memory_prompt}" + \
-                         "infer and summarize the most likely instruction."
-    traj_sum_prompt_v2 = "{memory_prompt}{visual_prompt}" + \
-                         "You are a navigation robot. Given the environment memory, infer and summarize the instruction."
     def __init__(self, cfg, split):
         self.use_sub_inst = cfg.data.vln.use_sub_inst
         super().__init__(cfg, split)
@@ -452,68 +389,11 @@ class VLNTrajSumBase(VLNBase):
         instruction = meta_data['instruction']
         current_odom = meta_data['current_odom']
 
-        if self.prompt_format == 'v1':
-            input_txt = self.traj_sum_prompt_v1.format(memory_prompt=self.memory_prompt)
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "video",
-                            "video": video_path,
-                        },
-                        {
-                            "type": "text",
-                            "text": input_txt,
-                        }
-                    ],
-                }
-            ]
-        elif self.prompt_format == 'v2':
-            visual_input = []
-            # split into history and current observation
-            if len(video_path) > 1:
-                # currently not supported, as max_num_frames is set to 1 -> len(video) = 1
-                visual_input.extend([
-                    {
-                        "type": "text",
-                        "text": "Historical observation: ",
-                    },
-                    {
-                        "type": "video",
-                        "video": video_path[:-1],
-                    },
-                ])
-
-            visual_input.extend([
-                {
-                    "type": "text",
-                    "text": "Current observation: ",
-                },
-                {
-                    "type": "image",
-                    "image": video_path[-1],
-                },
-            ])
-            input_txt = self.traj_sum_prompt_v2.split('{visual_prompt}')[-1]
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": self.memory_prompt,
-                        },
-                        *visual_input,
-                        {
-                            "type": "text",
-                            "text": input_txt,
-                        },
-                    ],
-                }
-            ]
-        else:
-            raise ValueError(f"Invalid navigation prompt format: {self.prompt_format}")
+        user_message, input_txt = build_trajectory_summary_user_message(
+            self.memory_prompt,
+            video_path,
+        )
+        messages = [user_message]
 
         output_gt = instruction
         if self.split == 'train':
@@ -642,7 +522,7 @@ class VLNTrajSumMP3DR2R(VLNTrajSumBase):
 
 
 @DATASET_REGISTRY.register()
-class VLNTrajSumMP3DRxRV2(VLNTrajSumBase):
+class VLNTrajSumMP3DRxR(VLNTrajSumBase):
     def __init__(self, cfg, split):
         self.domain = 'MP3D'
         self.split = split
@@ -653,7 +533,8 @@ class VLNTrajSumMP3DRxRV2(VLNTrajSumBase):
         num_demos = 0
         anno_dir = data_cfg.anno_dir
 
-        anno_path = os.path.join(anno_dir, 'rxr', self.split + '_v2', 'annotations.json')
+        split_dir = _rxr_cache_split_dir(anno_dir, self.split)
+        anno_path = os.path.join(split_dir, 'annotations.json')
         with open(anno_path, 'r') as f:
             anno_data = json.load(f)
         
@@ -685,7 +566,7 @@ class VLNTrajSumMP3DRxRV2(VLNTrajSumBase):
                 raise NotImplementedError(f"obs_hist_sample: {self.obs_hist_sample}")
 
             for hist_ind in obs_hist_sample:
-                video_path.append(os.path.join(anno_dir, 'rxr', self.split + '_v2', str(traj_id), 'rgb', f'{hist_ind}.jpg'))
+                video_path.append(os.path.join(split_dir, str(traj_id), 'rgb', f'{hist_ind}.jpg'))
 
             meta_data.append({
                 'scene_id': scene_id,
@@ -978,24 +859,24 @@ class VLNRealWorld(VLNBase):
 
 
 @DATASET_REGISTRY.register()
-class LeoMix(Dataset):
+class VLNDatasetMix(Dataset):
     # for train
     mapping = {
         'vln_mp3d_r2r': VLNMP3DR2R,
-        'vln_mp3d_rxr_v2': VLNMP3DRxRV2,
+        'vln_mp3d_rxr': VLNMP3DRxR,
         'vln_traj_sum_mp3d_r2r': VLNTrajSumMP3DR2R,
-        'vln_traj_sum_mp3d_rxr_v2': VLNTrajSumMP3DRxRV2,
+        'vln_traj_sum_mp3d_rxr': VLNTrajSumMP3DRxR,
         'vln_realworld': VLNRealWorld,
     }
 
     def __init__(self, cfg, split):
         self.datasets = []
         self.dataset_keys = []
-        self.use_custom_sampler = cfg.task.leomix.LeoMix.use_custom_sampler
-        mix_dict = cfg.task.leomix.LeoMix.mix
-        ratio = self._normalize_ratios(cfg.task.leomix.LeoMix.ratio)
-        self.ratio_unit = getattr(cfg.task.leomix.LeoMix, 'ratio_unit', 'sample')
-        logger.info(f"LeoMix about to load:\n{OmegaConf.to_yaml(mix_dict, resolve=True)}\n")
+        self.use_custom_sampler = cfg.task.dataset_mix.VLNDatasetMix.use_custom_sampler
+        mix_dict = cfg.task.dataset_mix.VLNDatasetMix.mix
+        ratio = self._normalize_ratios(cfg.task.dataset_mix.VLNDatasetMix.ratio)
+        self.ratio_unit = getattr(cfg.task.dataset_mix.VLNDatasetMix, 'ratio_unit', 'sample')
+        logger.info(f"VLNDatasetMix about to load:\n{OmegaConf.to_yaml(mix_dict, resolve=True)}\n")
         for task, v0 in mix_dict.items():
             for source in v0:
                 dataset_key = f'{task}_{source}'
@@ -1007,7 +888,7 @@ class LeoMix(Dataset):
         else:
             ratios = [float(r) for r in ratio]
             assert len(ratios) == len(self.datasets), \
-                f"LeoMix ratio length {len(ratios)} must match dataset count {len(self.datasets)}"
+                f"VLNDatasetMix ratio length {len(ratios)} must match dataset count {len(self.datasets)}"
 
         self.index_map = []
         self.index_range = [0]
@@ -1019,10 +900,10 @@ class LeoMix(Dataset):
         elif self.ratio_unit == 'sample':
             self._build_sample_index_map(ratios)
         else:
-            raise ValueError(f"Unsupported LeoMix ratio_unit: {self.ratio_unit}")
+            raise ValueError(f"Unsupported VLNDatasetMix ratio_unit: {self.ratio_unit}")
 
-        logger.info(f"Indices of LeoMix datasets: {self.index_range}")
-        logger.info(f"LeoMix ratio_unit={self.ratio_unit}, total samples={len(self.index_map)}")
+        logger.info(f"Indices of VLNDatasetMix datasets: {self.index_range}")
+        logger.info(f"VLNDatasetMix ratio_unit={self.ratio_unit}, total samples={len(self.index_map)}")
 
     @staticmethod
     def _normalize_ratios(ratio):
@@ -1124,7 +1005,7 @@ class LeoMix(Dataset):
 
             self.index_range.append(len(self.index_map))
             logger.info(
-                f"LeoMix episode ratio selected {selected_streams} streams from "
+                f"VLNDatasetMix episode ratio selected {selected_streams} streams from "
                 f"{len(episode_order)} episodes for {self.dataset_keys[dataset_idx]} "
                 f"(ratio={ratio})"
             )

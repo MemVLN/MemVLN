@@ -4,7 +4,10 @@ import torch
 import numpy as np
 
 from typing import Any
-from common.vln_prompt import resolve_memory_prompt
+from common.vln_prompt import (
+    build_navigation_user_message,
+    resolve_memory_prompt,
+)
 from data.data_utils import dict_to_cuda, merge_actions
 from model.qwen.processing_qwen3_vl import Qwen3VLProcessor
 from model.streamvggt.processing import (
@@ -48,12 +51,6 @@ class VLNEvaluator:
         if self.use_mem:
             self.processor.__init_memory__(cfg.llm.mem_module.memory_token_num)
 
-        self.navigation_prompt_v1 = "You are a navigation robot to perform the instruction: {instruction} " + \
-                                    "{memory_prompt}" + \
-                                    "{act_hist_prompt}What is your next action?"
-        self.navigation_prompt_v2 = "{memory_prompt}{visual_prompt}" + \
-                                    "You are a navigation robot to perform the instruction: {instruction} " + \
-                                    "{act_hist_prompt}What is your next action?"
         self.obs_hist_sample = cfg.data.vln.obs_hist_sample
         self.max_num_frames = cfg.data.vln.max_num_frames
         self.merge_action = cfg.data.vln.merge_action
@@ -61,15 +58,9 @@ class VLNEvaluator:
         self.memory_prompt = resolve_memory_prompt(cfg.data.vln.memory_prompt)
         self.sample_step = cfg.data.vln.sample_step
         self.num_future_steps = cfg.data.vln.num_future_steps
-        self.prompt_format = cfg.data.vln.prompt_format
         self.dense_vggt_input = (
             resolve_dense_vggt_input(cfg.data.vln) if self.use_vggt else False
         )
-        if self.use_vggt and self.prompt_format != "v2":
-            raise ValueError(
-                "Real-world StreamVGGT inference requires data.vln.prompt_format=v2 "
-                "to separate historical and current observations."
-            )
         if not self.use_mem or not cfg.data.vln.memory_prompt:
             raise ValueError(
                 "MemVLN real-world inference requires the memory model and "
@@ -181,75 +172,14 @@ class VLNEvaluator:
         else:
             raise NotImplementedError(f"obs_hist_sample: {self.obs_hist_sample}")
         
-        if self.prompt_format == 'v1':
-            input_txt = self.navigation_prompt_v1.format(
-                instruction=self.instruction,
-                memory_prompt=self.memory_prompt,
-                act_hist_prompt=act_hist_prompt
-            )
-        
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "video",
-                            "video": [self.his_rgb_list[idx] for idx in obs_hist_sample],
-                        },
-                        {
-                            "type": "text",
-                            "text": input_txt
-                        },
-                    ],
-                }
-            ]
-        elif self.prompt_format == 'v2':
-            visual_input = []
-            # split into history and current observation
-            if len(obs_hist_sample) > 1:
-                visual_input.extend([
-                    {
-                        "type": "text",
-                        "text": "Historical observation: ",
-                    },
-                    {
-                        "type": "video",
-                        "video": [self.his_rgb_list[idx] for idx in obs_hist_sample[:-1]],
-                    }
-                ])
-            
-            visual_input.extend([
-                {
-                    "type": "text",
-                    "text": "Current observation: ",
-                },
-                {
-                    "type": "image",
-                    "image": self.his_rgb_list[obs_hist_sample[-1]],
-                }
-            ])
-            input_txt = self.navigation_prompt_v2.split('{visual_prompt}')[-1].format(
-                instruction=self.instruction,
-                act_hist_prompt=act_hist_prompt
-            )
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": self.memory_prompt,
-                        },
-                        *visual_input,
-                        {
-                            "type": "text",
-                            "text": input_txt,
-                        },
-                    ],
-                }
-            ]
-        else:
-            raise ValueError(f"Invalid navigation prompt format: {self.prompt_format}")
+        input_image_list = [self.his_rgb_list[idx] for idx in obs_hist_sample]
+        user_message, input_txt = build_navigation_user_message(
+            self.memory_prompt,
+            input_image_list,
+            self.instruction,
+            act_hist_prompt,
+        )
+        messages = [user_message]
         
         data_dict = self.processor.apply_chat_template(
             messages,

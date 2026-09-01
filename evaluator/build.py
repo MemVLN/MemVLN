@@ -9,7 +9,7 @@ _EVALUATOR_MODULES = {
 }
 
 
-def build_eval_leo(cfg, dataset_name, evaluator_name):
+def build_evaluator(cfg, dataset_name, evaluator_name):
     module_name = _EVALUATOR_MODULES.get(evaluator_name)
     if module_name is not None:
         import_module(module_name)

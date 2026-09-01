@@ -182,11 +182,16 @@ ${annotation_base}/vln/
                 └── <frame_id>.jpg
 ```
 
+`train_v2` is the inherited processed-cache directory name. The dataset,
+configuration keys, and Python interfaces use the unversioned name `RxR`.
+
 Set the root at launch time:
 
 ```text
 data.annotation_base=/path/to/annotations
 ```
+
+Alternatively, set `MEMVLN_DATA_ROOT`; the local fallback is `./datasets`.
 
 Habitat evaluation additionally requires the Matterport3D scenes and the R2R
 or RxR VLN-CE episode files. Update `habitat.dataset.scenes_dir` and
@@ -227,7 +232,7 @@ the saved config:
 
 | Checkpoint-attached setting | Value |
 | --- | --- |
-| Task mixture | R2R + RxR-v2 navigation and trajectory summarization |
+| Task mixture | R2R + RxR navigation and trajectory summarization |
 | GPUs | 8 |
 | Per-GPU batch size | 1 |
 | Gradient accumulation | 1 |
@@ -235,7 +240,7 @@ the saved config:
 | Learning rate | `2e-5` |
 | Memory tokens | 300 |
 | Observation history | nearest 16 frames |
-| Prompt format | v2 with memory prompt |
+| Prompt structure | memory + labeled historical/current observations |
 | StreamVGGT cached features | enabled |
 
 The cleaned implementation also applies these explicit current policies:
@@ -279,12 +284,12 @@ machines without an NVIDIA EGL/OpenGL evaluation environment. It does not
 change the model or training loss.
 
 `data.annotation_base` must point to the parent of the `vln/` directory. For
-example, when the data lives at `/workspace/data/leo2_data/vln`, set
-`data.annotation_base=/workspace/data/leo2_data` because the config appends
+example, when the data lives at `/workspace/data/memvln_data/vln`, set
+`data.annotation_base=/workspace/data/memvln_data` because the config appends
 `/vln`.
 
 Do not carry forward the obsolete
-`task.training.repa_loss_weight=0` override from intermediate LEO-R commands.
+`task.training.repa_loss_weight=0` override from pre-release commands.
 That component and config field are absent in the cleaned training path; the
 zero-valued override had no role in the April checkpoint recipe.
 

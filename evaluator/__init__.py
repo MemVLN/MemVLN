@@ -1,6 +1,6 @@
-from .build import EVALUATOR_REGISTRY, build_eval_leo
+from .build import EVALUATOR_REGISTRY, build_evaluator
 
-__all__ = ['EVALUATOR_REGISTRY', 'build_eval_leo', 'VLNCEEvaluator']
+__all__ = ['EVALUATOR_REGISTRY', 'build_evaluator', 'VLNCEEvaluator']
 
 
 def __getattr__(name):

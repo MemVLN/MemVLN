@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TRAINER_PATH = ROOT / "trainer" / "leo_trainer.py"
+TRAINER_PATH = ROOT / "trainer" / "memvln_trainer.py"
 TRAINER_SOURCE = TRAINER_PATH.read_text(encoding="utf-8")
 TRAINER_TREE = ast.parse(TRAINER_SOURCE, filename=str(TRAINER_PATH))
 TRAINER_BUILD_PATH = ROOT / "trainer" / "build.py"
@@ -161,7 +161,7 @@ class CheckpointCompatibilityReportTests(unittest.TestCase):
         trainer_class = next(
             node
             for node in TRAINER_TREE.body
-            if isinstance(node, ast.ClassDef) and node.name == "LeoTrainer"
+            if isinstance(node, ast.ClassDef) and node.name == "MemVLNTrainer"
         )
         load_method = next(
             node
@@ -288,7 +288,7 @@ class CheckpointRuntimeContractTests(unittest.TestCase):
         trainer_class = next(
             node
             for node in TRAINER_TREE.body
-            if isinstance(node, ast.ClassDef) and node.name == "LeoTrainer"
+            if isinstance(node, ast.ClassDef) and node.name == "MemVLNTrainer"
         )
         train_step = next(
             node

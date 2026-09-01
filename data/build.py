@@ -17,7 +17,7 @@ from data.video_sampler import VideoDistributedSampler
 DATASET_REGISTRY = Registry('Dataset')
 
 
-def get_dataset_leo(cfg, split, dataset_name):
+def get_dataset(cfg, split, dataset_name):
     dataset = DATASET_REGISTRY.get(dataset_name)(cfg, split)
     return dataset
 
@@ -57,8 +57,8 @@ def make_collate_fn_qwen(processor, use_vggt=False, dense_vggt_input=False):
     return collate_fn
 
 
-def build_dataloader_leo(cfg, split, dataset_name, dataloader_args):
-    dataset = get_dataset_leo(cfg, split, dataset_name)
+def build_dataloader(cfg, split, dataset_name, dataloader_args):
+    dataset = get_dataset(cfg, split, dataset_name)
     use_vggt = 'vggt' in cfg.vision3d.name.lower()
     dense_vggt_input = resolve_dense_vggt_input(cfg.data.vln) if use_vggt else False
     if split == "train" and dataset.use_custom_sampler:
