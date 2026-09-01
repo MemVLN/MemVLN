@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 
 from data.datasets import VLNBase, VLNTrajSumBase
-from model.leo_agent import LeoAgent
+from model.memvln_agent import MemVLNAgent
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,7 +18,6 @@ def make_dataset(dataset_cls, split):
     dataset.split = split
     dataset.domain = "MP3D"
     dataset.realworld_resize_size = None
-    dataset.prompt_format = "v2"
     dataset.memory_prompt = ""
     dataset.use_vggt = False
     return dataset
@@ -88,13 +87,13 @@ class DatasetSFTContractTests(unittest.TestCase):
                 self.assertNotIn("vggt_feat", sample)
 
 
-class LeoAgentSFTContractTests(unittest.TestCase):
+class MemVLNAgentSFTContractTests(unittest.TestCase):
     def test_forward_dispatches_directly_to_sft(self):
         expected = {"loss": torch.tensor(1.0)}
         agent = SimpleNamespace(sft_forward=Mock(return_value=expected))
         data_dict = {"input_ids": torch.tensor([[1, 2]])}
 
-        result = LeoAgent.forward(agent, data_dict)
+        result = MemVLNAgent.forward(agent, data_dict)
 
         self.assertIs(result, expected)
         agent.sft_forward.assert_called_once_with(data_dict)
@@ -118,7 +117,7 @@ class LeoAgentSFTContractTests(unittest.TestCase):
         )
         data_dict = {"input_ids": torch.tensor([[11, 12]])}
 
-        result = LeoAgent.generate(
+        result = MemVLNAgent.generate(
             agent,
             data_dict,
             num_beams=2,
@@ -155,8 +154,8 @@ class LeoAgentSFTContractTests(unittest.TestCase):
         expected_unweighted = per_token_loss.mean()
         expected_weighted = (per_sample_loss * weights).sum() / weights.sum()
 
-        unweighted = LeoAgent.compute_ce_loss(None, logits, targets)
-        weighted = LeoAgent.compute_ce_loss(
+        unweighted = MemVLNAgent.compute_ce_loss(None, logits, targets)
+        weighted = MemVLNAgent.compute_ce_loss(
             None,
             logits,
             targets,
@@ -175,8 +174,8 @@ class LegacyRemovalContractTests(unittest.TestCase):
         checked_files = [
             ROOT / "data" / "data_utils.py",
             ROOT / "data" / "datasets.py",
-            ROOT / "trainer" / "leo_trainer.py",
-            ROOT / "model" / "leo_agent.py",
+            ROOT / "trainer" / "memvln_trainer.py",
+            ROOT / "model" / "memvln_agent.py",
         ]
         forbidden = (
             "use_grpo",

@@ -232,7 +232,7 @@ class VideoSamplerConsumptionProgressTests(unittest.TestCase):
         self.assertEqual(result, [7, 5])
 
     def test_trainer_confirms_consumption_before_checkpoint_sidecar_flush(self):
-        trainer_path = ROOT / "trainer" / "leo_trainer.py"
+        trainer_path = ROOT / "trainer" / "memvln_trainer.py"
         tree = ast.parse(
             trainer_path.read_text(encoding="utf-8"),
             filename=str(trainer_path),
@@ -240,7 +240,7 @@ class VideoSamplerConsumptionProgressTests(unittest.TestCase):
         trainer_class = next(
             node
             for node in tree.body
-            if isinstance(node, ast.ClassDef) and node.name == "LeoTrainer"
+            if isinstance(node, ast.ClassDef) and node.name == "MemVLNTrainer"
         )
         train_step = next(
             node

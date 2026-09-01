@@ -128,7 +128,7 @@ class OfflineFeatureRemovalContractTests(unittest.TestCase):
             ROOT / "configs" / "vision3d" / "streamvggt.yaml",
             ROOT / "data" / "build.py",
             ROOT / "data" / "datasets.py",
-            ROOT / "model" / "leo_agent.py",
+            ROOT / "model" / "memvln_agent.py",
             ROOT / "model" / "qwen" / "modeling_qwen3_vl.py",
             ROOT / "model" / "qwen" / "modeling_qwen3_vl_mem_vggt.py",
             ROOT / "trainer" / "__init__.py",

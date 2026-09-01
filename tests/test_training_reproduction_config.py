@@ -11,7 +11,7 @@ from accelerate import Accelerator
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
-from model.leo_agent import LeoAgent, resolve_memory_param_dtype
+from model.memvln_agent import MemVLNAgent, resolve_memory_param_dtype
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,16 +66,16 @@ class MemoryParameterDtypeTests(unittest.TestCase):
         self.assertIs(cfg.data.vln.aug_stop_steps, False)
         self.assertEqual(
             cfg.note,
-            "sft_r2r_rxr_v2_prompt_v2_memory_16frame_w_traj_sum_"
+            "sft_r2r_rxr_memory_16frame_w_traj_sum_"
             "streamvggt_cache_feat",
         )
         self.assertEqual(
-            list(cfg.task.leomix.LeoMix.mix.vln),
+            list(cfg.task.dataset_mix.VLNDatasetMix.mix.vln),
             [
                 "mp3d_r2r",
-                "mp3d_rxr_v2",
+                "mp3d_rxr",
                 "traj_sum_mp3d_r2r",
-                "traj_sum_mp3d_rxr_v2",
+                "traj_sum_mp3d_rxr",
             ],
         )
         self.assertTrue(cfg.inference.cache_grounded_memory)
@@ -114,10 +114,10 @@ class MemoryParameterDtypeTests(unittest.TestCase):
         agent = SimpleNamespace(model=outer_model, processor=processor)
 
         with (
-            mock.patch("model.leo_agent.ToMeMemoryBank", return_value=memory),
-            mock.patch("model.leo_agent.logger.info"),
+            mock.patch("model.memvln_agent.ToMeMemoryBank", return_value=memory),
+            mock.patch("model.memvln_agent.logger.info"),
         ):
-            LeoAgent.build_mem_modules(agent, cfg)
+            MemVLNAgent.build_mem_modules(agent, cfg)
 
         floating_tensors = [
             *memory.parameters(),
@@ -137,7 +137,7 @@ class MemoryParameterDtypeTests(unittest.TestCase):
 
 class GradientAccumulationRegressionTests(unittest.TestCase):
     def test_unprepared_loader_syncs_the_final_partial_accumulation_window(self):
-        trainer_path = ROOT / "trainer" / "leo_trainer.py"
+        trainer_path = ROOT / "trainer" / "memvln_trainer.py"
         tree = ast.parse(
             trainer_path.read_text(encoding="utf-8"),
             filename=str(trainer_path),
@@ -181,7 +181,7 @@ class GradientAccumulationRegressionTests(unittest.TestCase):
         self.assertEqual(sync_boundaries, [False, True, True])
 
     def test_backward_zeroes_gradients_after_the_accumulated_update(self):
-        trainer_path = ROOT / "trainer" / "leo_trainer.py"
+        trainer_path = ROOT / "trainer" / "memvln_trainer.py"
         tree = ast.parse(
             trainer_path.read_text(encoding="utf-8"),
             filename=str(trainer_path),
@@ -189,7 +189,7 @@ class GradientAccumulationRegressionTests(unittest.TestCase):
         trainer_class = next(
             node
             for node in tree.body
-            if isinstance(node, ast.ClassDef) and node.name == "LeoTrainer"
+            if isinstance(node, ast.ClassDef) and node.name == "MemVLNTrainer"
         )
         backward_method = next(
             node

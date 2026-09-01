@@ -58,17 +58,11 @@ def make_evaluator(outputs):
     evaluator.use_vggt = True
     evaluator.use_mem = False
     evaluator.dense_vggt_input = True
-    evaluator.navigation_prompt_v1 = ""
-    evaluator.navigation_prompt_v2 = (
-        "{memory_prompt}{visual_prompt}"
-        "Instruction: {instruction}. {act_hist_prompt}Next?"
-    )
     evaluator.obs_hist_sample = "nearest"
     evaluator.max_num_frames = 16
     evaluator.merge_action = True
     evaluator.max_act_hist = 0
     evaluator.memory_prompt = ""
-    evaluator.prompt_format = "v2"
     evaluator.instruction = "Walk to the door."
     evaluator.reset_memory()
     return evaluator
