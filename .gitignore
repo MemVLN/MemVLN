@@ -8,7 +8,8 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-tests/
+tests/*
+!/tests/test_episode_dataset_mix.py
 build/
 develop-eggs/
 dist/

@@ -1,5 +1,6 @@
 defaults:
   - data: default
+  # Sampling mode and ratios are in the selected configs/task/<name>.yaml.
   - task: sft_r2r_rxr_w_traj_sum
   - llm: qwen3-4b-mem
   - vision3d: streamvggt

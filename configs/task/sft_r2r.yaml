@@ -8,9 +8,16 @@ dataset_mix:
   VLNDatasetMix:
     mode: [train]
     mix:
-      vln: [mp3d_r2r]
-    ratio: 1.0
+      vln:
+        - mp3d_r2r
+    # With the custom sampler, sample mode requires all ratios to stay at 1.
+    # To repeat whole trajectories, use episode and e.g. ratio: [2].
+    ratio_unit: sample
+    # Multipliers follow the dataset order above.
+    ratio:
+      - 1.0  # R2R navigation
     train_dataloader_args: ${dataloader.train}
+    # Consume each episode in temporal order; independent of ratio_unit.
     use_custom_sampler: True
 
 vlnce:

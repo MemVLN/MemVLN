@@ -967,7 +967,20 @@ class VLNDatasetMix(Dataset):
         self.stream_episode_to_clip_ids = {}
         self.stream_episode_to_orig_episode = {}
 
+        # Navigation and summary share trajectory state within one replay.
+        # Keep unrelated datasets and separate replays in distinct namespaces.
+        summary_to_navigation = {
+            'vln_traj_sum_mp3d_r2r': 'vln_mp3d_r2r',
+            'vln_traj_sum_mp3d_rxr': 'vln_mp3d_rxr',
+        }
+        navigation_streams = set()
+        paired_summary_streams = []
+
         for dataset_idx, dataset in enumerate(self.datasets):
+            dataset_key = self.dataset_keys[dataset_idx]
+            navigation_key = summary_to_navigation.get(dataset_key)
+            paired_summary = navigation_key in self.dataset_keys
+            stream_dataset_key = navigation_key if paired_summary else dataset_key
             ratio = ratios[dataset_idx]
             episode_order, episode_to_items = self._group_episodes(dataset)
             full_repeats = int(ratio) if ratio >= 1 else 0
@@ -984,12 +997,16 @@ class VLNDatasetMix(Dataset):
             for repeat_idx, selected_episode_ids in repeat_plan:
                 for orig_episode_id in selected_episode_ids:
                     stream_episode_id = (
-                        f"{self.dataset_keys[dataset_idx]}::"
+                        f"{stream_dataset_key}::"
                         f"{orig_episode_id}::rep{repeat_idx}"
                     )
-                    self.stream_episode_to_indices[stream_episode_id] = []
-                    self.stream_episode_to_clip_ids[stream_episode_id] = []
+                    self.stream_episode_to_indices.setdefault(stream_episode_id, [])
+                    self.stream_episode_to_clip_ids.setdefault(stream_episode_id, [])
                     self.stream_episode_to_orig_episode[stream_episode_id] = orig_episode_id
+                    if paired_summary:
+                        paired_summary_streams.append((dataset_key, stream_episode_id))
+                    elif dataset_key in summary_to_navigation.values():
+                        navigation_streams.add(stream_episode_id)
                     for clip_id, local_idx in episode_to_items[orig_episode_id]:
                         global_idx = len(self.index_map)
                         self.index_map.append({
@@ -1009,6 +1026,29 @@ class VLNDatasetMix(Dataset):
                 f"{len(episode_order)} episodes for {self.dataset_keys[dataset_idx]} "
                 f"(ratio={ratio})"
             )
+
+        # Independently selected fractional subsets need not be nested, even
+        # when the summary ratio is smaller. Never silently train a paired
+        # summary replay without its navigation history.
+        for dataset_key, stream_episode_id in paired_summary_streams:
+            if stream_episode_id not in navigation_streams:
+                raise ValueError(
+                    f"Summary dataset {dataset_key} selected {stream_episode_id} "
+                    "without a corresponding navigation replay. Choose episode "
+                    "ratios/subsets that include navigation for every summary replay."
+                )
+
+        for stream_episode_id, indices in self.stream_episode_to_indices.items():
+            clip_ids = self.stream_episode_to_clip_ids[stream_episode_id]
+            ordered = sorted(
+                zip(clip_ids, indices),
+                key=lambda item: (
+                    item[0],
+                    self.index_map[item[1]]['dataset_key'] in summary_to_navigation,
+                ),
+            )
+            self.stream_episode_to_clip_ids[stream_episode_id] = [clip for clip, _ in ordered]
+            self.stream_episode_to_indices[stream_episode_id] = [index for _, index in ordered]
 
     def __len__(self):
         return len(self.index_map)

@@ -6,14 +6,20 @@ task:
     lr: 2e-6
     epochs: 1
     dummy_lr_decay: False
+
   dataset_mix:
     VLNDatasetMix:
       mode: [train]
       mix:
-        vln: [realworld]
-      ratio: [6.0]
+        vln:
+          - realworld
+      # Repeat whole trajectories; each multiplier is total passes per epoch.
       ratio_unit: episode
+      # Multipliers follow the dataset order above.
+      ratio:
+        - 6.0  # Real-world navigation
       train_dataloader_args: ${dataloader.train}
+      # Consume each episode in temporal order; independent of ratio_unit.
       use_custom_sampler: True
 
 data:

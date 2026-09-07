@@ -11,11 +11,15 @@ task:
     VLNDatasetMix:
       mode: [train]
       mix:
-        vln: [realworld]
-      # Episode-level multiplier oversamples real-world demonstrations.
-      ratio: [6.0]
+        vln:
+          - realworld
+      # Repeat whole trajectories; each multiplier is total passes per epoch.
       ratio_unit: episode
+      # Multipliers follow the dataset order above.
+      ratio:
+        - 6.0  # Real-world navigation
       train_dataloader_args: ${dataloader.train}
+      # Consume each episode in temporal order; independent of ratio_unit.
       use_custom_sampler: True
 
 # no eval by default; enable vlnce below when running regression checks
