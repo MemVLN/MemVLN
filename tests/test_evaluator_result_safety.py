@@ -205,20 +205,98 @@ class SplitResultMergeSafetyTests(unittest.TestCase):
             ):
                 merge_results(target_dir)
 
-    def test_non_finite_metric_fails(self):
-        for non_finite in (float("nan"), float("inf"), float("-inf")):
-            with self.subTest(non_finite=non_finite):
+    def test_non_finite_values_are_skipped_independently_per_metric(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target_dir = Path(directory)
+            first = result_record("scene-a", "episode-0", ndtw=0.4)
+            first.update(success=True, spl=float("nan"))
+            second = result_record("scene-b", "episode-1", ndtw=0.8)
+            second.update(
+                steps=20,
+                success=False,
+                oracle_success=float("inf"),
+                spl=0.25,
+                distance_to_goal=float("-inf"),
+            )
+            third = result_record("scene-c", "episode-2", ndtw=float("inf"))
+            third.update(
+                steps=30,
+                success=float("nan"),
+                oracle_success=False,
+                spl=0.75,
+                distance_to_goal=6.0,
+            )
+            write_jsonl(target_dir / "results_split_0.json", [first, second])
+            write_jsonl(target_dir / "results_split_1.json", [third])
+
+            merged = merge_results(
+                target_dir, expected_splits=2, expected_episodes=3
+            )
+            persisted = json.loads(
+                (target_dir / "final_merged.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(merged["count"], 3)
+        self.assertEqual(merged["success"], 0.5)
+        self.assertEqual(merged["oracle_success"], 0.5)
+        self.assertEqual(merged["spl"], 0.5)
+        self.assertEqual(merged["distance_to_goal"], 4.0)
+        self.assertEqual(merged["steps"], 20.0)
+        self.assertAlmostEqual(merged["ndtw"], 0.6)
+        self.assertEqual(persisted, merged)
+
+    def test_metric_with_no_finite_values_is_written_as_null(self):
+        fields = ("success", "oracle_success", "spl", "distance_to_goal", "ndtw")
+        non_finite_values = (float("nan"), float("inf"), float("-inf"))
+        for field in fields:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as directory:
+                    target_dir = Path(directory)
+                    records = []
+                    for index, value in enumerate(non_finite_values):
+                        record = result_record("scene-a", str(index), ndtw=0.5)
+                        record[field] = value
+                        records.append(record)
+                    write_jsonl(target_dir / "results_split_0.json", records)
+
+                    merged = merge_results(target_dir, expected_episodes=3)
+                    output = (target_dir / "final_merged.json").read_text(
+                        encoding="utf-8"
+                    )
+
+                self.assertIsNone(merged[field])
+                self.assertEqual(merged["count"], 3)
+                self.assertEqual(merged["steps"], 10.0)
+                self.assertIn(f'"{field}": null', output)
+                self.assertNotIn("NaN", output)
+                self.assertNotIn("Infinity", output)
+
+    def test_non_numeric_metric_still_fails_with_file_and_line(self):
+        for value in ("nan", None, False):
+            with self.subTest(value=value):
                 with tempfile.TemporaryDirectory() as directory:
                     target_dir = Path(directory)
                     record = result_record("scene-a", "episode-0")
-                    record["spl"] = non_finite
-                    write_jsonl(
-                        target_dir / "results_split_0.json",
-                        [record],
-                    )
+                    record["spl"] = value
+                    write_jsonl(target_dir / "results_split_0.json", [record])
 
                     with self.assertRaisesRegex(
-                        ValueError, "field 'spl' must be finite"
+                        ValueError,
+                        r"results_split_0\.json:1: field 'spl' must be numeric",
+                    ):
+                        merge_results(target_dir)
+
+    def test_invalid_steps_still_fail(self):
+        for value in (float("nan"), float("inf"), float("-inf"), 1.5, True, -1):
+            with self.subTest(value=value):
+                with tempfile.TemporaryDirectory() as directory:
+                    target_dir = Path(directory)
+                    record = result_record("scene-a", "episode-0")
+                    record["steps"] = value
+                    write_jsonl(target_dir / "results_split_0.json", [record])
+
+                    with self.assertRaisesRegex(
+                        ValueError, "field 'steps' must be a non-negative integer"
                     ):
                         merge_results(target_dir)
 

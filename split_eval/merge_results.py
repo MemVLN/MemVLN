@@ -74,15 +74,13 @@ def _validate_identifier(value, field, location):
         raise ValueError(f"{location}: field {field!r} must not be empty")
 
 
-def _validate_finite_number(value, field, location):
+def _validate_number(value, field, location):
     if isinstance(value, bool):
         if field not in {"success", "oracle_success"}:
             raise ValueError(f"{location}: field {field!r} must be numeric")
         value = int(value)
     if not isinstance(value, (int, float)):
         raise ValueError(f"{location}: field {field!r} must be numeric")
-    if not math.isfinite(value):
-        raise ValueError(f"{location}: field {field!r} must be finite")
     return value
 
 
@@ -129,9 +127,9 @@ def load_split_records(split_paths):
                     )
                 seen_episodes[episode_key] = location
 
-                for field in ("steps", *CORE_METRICS, *OPTIONAL_METRICS):
+                for field in (*CORE_METRICS, *OPTIONAL_METRICS):
                     if field in record:
-                        _validate_finite_number(record[field], field, location)
+                        _validate_number(record[field], field, location)
 
                 steps = record["steps"]
                 if (
@@ -161,6 +159,10 @@ def load_split_records(split_paths):
 
 
 def aggregate_records(records):
+    """Average each metric over its finite values; use None if none remain.
+
+    The episode count includes all records, even if a metric is non-finite.
+    """
     if not records:
         raise ValueError("Cannot aggregate an empty result set")
 
@@ -168,10 +170,13 @@ def aggregate_records(records):
     metric_fields.extend(
         field for field in OPTIONAL_METRICS if field in records[0]
     )
-    averages = {
-        field: sum(record[field] for record in records) / len(records)
-        for field in metric_fields
-    }
+    averages = {}
+    for field in metric_fields:
+        values = [
+            record[field] for record in records
+            if math.isfinite(record[field])
+        ]
+        averages[field] = sum(values) / len(values) if values else None
     averages["count"] = len(records)
     return averages
 
