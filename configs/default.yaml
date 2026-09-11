@@ -45,6 +45,9 @@ inference:
 trainer: MemVLNTrainer
 training:
   epochs: ${task.training.epochs}
+  # Set a positive optimizer-update budget with probabilistic_episode sampling.
+  # null keeps the existing epoch-based training and scheduler behavior.
+  max_updates: null
   gradient_accumulation_steps: 1
   grad_norm: 1.0
   optim:

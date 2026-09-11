@@ -98,6 +98,60 @@ def resolve_checkpoint_total_limit(training_cfg):
     return total_limit
 
 
+def resolve_max_updates(training_cfg):
+    """Return the optional budget in synchronized optimizer updates."""
+    max_updates = training_cfg.get("max_updates")
+    if max_updates is None:
+        return None
+    if isinstance(max_updates, bool) or not isinstance(max_updates, int):
+        raise TypeError("training.max_updates must be a positive integer or null")
+    if max_updates < 1:
+        raise ValueError("training.max_updates must be at least 1")
+    return max_updates
+
+
+def validate_fixed_update_backend(accelerator):
+    """Only enable the update-count contract on explicitly supported backends."""
+    distributed_type = accelerator.distributed_type
+    distributed_type = getattr(distributed_type, "value", distributed_type)
+    if distributed_type not in {"NO", "MULTI_GPU", "MULTI_CPU"}:
+        raise ValueError(
+            "training.max_updates currently supports single-process and DDP "
+            f"training only; got {distributed_type!r}"
+        )
+    if accelerator.mixed_precision not in {"no", "bf16"}:
+        raise ValueError(
+            "training.max_updates requires mixed_precision=no or bf16 so "
+            "overflow-skipped fp16 updates cannot silently shorten the budget"
+        )
+
+
+def configure_fixed_update_scheduler(scheduler):
+    """Count scheduler and warmup steps once per actual optimizer update.
+
+    A rank-local streaming DataLoader bypasses Accelerate preparation. Its
+    default scheduler wrapper would nevertheless step once per world rank.
+    Override only the scheduler wrapper, without re-sharding the DataLoader or
+    disabling its gradient-accumulation and skipped-update protections.
+    """
+    if not hasattr(scheduler, "split_batches") or not getattr(
+        scheduler, "step_with_optimizer", False
+    ):
+        raise TypeError("Fixed-update training requires an AcceleratedScheduler")
+    scheduler.split_batches = True
+
+
+def fixed_update_remaining_batches(max_updates, optimizer_step, accumulation_steps):
+    if isinstance(optimizer_step, bool) or not isinstance(optimizer_step, int):
+        raise TypeError("Checkpoint optimizer_step must be an integer")
+    if not 0 <= optimizer_step <= max_updates:
+        raise ValueError(
+            f"Checkpoint optimizer_step={optimizer_step} is outside the "
+            f"configured update budget [0, {max_updates}]"
+        )
+    return (max_updates - optimizer_step) * accumulation_steps
+
+
 def resolve_model_checkpoint_path(path):
     """Resolve a model-only checkpoint from a file, checkpoint, or run path."""
     checkpoint_path = Path(path)
@@ -188,6 +242,7 @@ class MemVLNTrainer():
         self.mode = cfg.mode
 
         self.epochs = cfg.training.epochs
+        self.max_updates = resolve_max_updates(cfg.training)
         self.save_interval = cfg.training.save_interval
         self.val_interval = cfg.eval.val_interval
         self.num_batch_val = cfg.eval.num_batch_val
@@ -200,6 +255,12 @@ class MemVLNTrainer():
 
         # initialize accelerator
         gradient_accumulation_steps = cfg.training.get('gradient_accumulation_steps', 1)
+        self.gradient_accumulation_steps = gradient_accumulation_steps
+        if self.max_updates is not None and getattr(cfg.task.training, 'dummy_lr_decay', False):
+            raise ValueError(
+                "training.max_updates requires task.training.dummy_lr_decay=false; "
+                "the LR schedule must use the explicit optimizer-update budget"
+            )
         process_group_kwargs = InitProcessGroupKwargs(timeout=timedelta(hours=24))
 
         self.accelerator = CustomAccelerator(
@@ -212,6 +273,8 @@ class MemVLNTrainer():
             log_with=cfg.logger.name,
             kwargs_handlers=[process_group_kwargs]
         )
+        if self.max_updates is not None:
+            validate_fixed_update_backend(self.accelerator)
 
         # dataset, dataloader, evaluator
         self.data_loaders = {'train': {}, 'val': {}, 'test': {}}
@@ -240,6 +303,15 @@ class MemVLNTrainer():
                         self.eval_metrics[task_name] = {}
 
         assert len(self.data_loaders['train']['dataset_mix']) <= 1, "MemVLN requires only one training set"
+        training_loader = list(self.data_loaders['train']['dataset_mix'].values())[0]
+        probabilistic_sampler = getattr(training_loader.sampler, 'is_probabilistic_episode', False)
+        if probabilistic_sampler != (self.max_updates is not None):
+            raise ValueError(
+                "Probabilistic episode sampling and training.max_updates must "
+                "be enabled together"
+            )
+        if self.max_updates is not None and not self.use_custom_sampler:
+            raise ValueError("Fixed-update episode sampling requires use_custom_sampler=true")
 
         # prepare dataloaders
         all_loaders, all_loader_keys = [], []
@@ -281,7 +353,25 @@ class MemVLNTrainer():
             pretrained_ckpt_loaded = False
 
         # prepare model, optimizer and scheduler
-        if self.use_custom_sampler:
+        if self.max_updates is not None:
+            total_steps = self.max_updates
+            warmup_steps = cfg.training.schedule.args.warmup_steps
+            if (
+                isinstance(warmup_steps, bool)
+                or not isinstance(warmup_steps, int)
+                or not 0 <= warmup_steps < total_steps
+            ):
+                raise ValueError(
+                    "Fixed-update warmup_steps must be an integer in "
+                    "[0, training.max_updates)"
+                )
+            logger.info(
+                f"Fixed optimizer-update budget: {self.max_updates}; "
+                f"warmup: {cfg.training.schedule.args.warmup_steps} optimizer updates. "
+                "Epoch count is unused; validation runs only after training to "
+                "preserve active episode memory."
+            )
+        elif self.use_custom_sampler:
             loader = list(self.data_loaders['train']['dataset_mix'].values())[0]
             current_len = len(loader)
             skipped_len = getattr(loader.sampler, 'skipped_batches', 0)
@@ -306,6 +396,14 @@ class MemVLNTrainer():
             total_steps *= 5
         if len(optim_params) > 0:
             self.optimizer, self.scheduler = build_optim(cfg, optim_params, total_steps=total_steps)
+            if self.max_updates is not None:
+                self.fixed_update_schedule_contract = {
+                    'name': cfg.training.schedule.name,
+                    'warmup_steps': cfg.training.schedule.args.warmup_steps,
+                    'base_lrs': list(self.scheduler.base_lrs),
+                }
+        elif self.max_updates is not None:
+            raise ValueError("Fixed-update training requires trainable parameters")
         
         objects_to_prepare = [self.model]
         if len(optim_params) > 0:
@@ -327,6 +425,8 @@ class MemVLNTrainer():
         if len(optim_params) > 0:
             self.optimizer = next(prepared_iter)
             self.scheduler = next(prepared_iter)
+            if self.max_updates is not None:
+                configure_fixed_update_scheduler(self.scheduler)
         if not self.use_custom_sampler:
             self.data_loaders['train']['dataset_mix']['VLNDatasetMix'] = next(prepared_iter)
 
@@ -492,7 +592,19 @@ class MemVLNTrainer():
         self.model.train()
         loader = list(self.data_loaders['train']['dataset_mix'].values())[0]
 
-        if hasattr(loader.sampler, "set_epoch"):
+        fixed_updates = self.max_updates is not None
+        if fixed_updates:
+            remaining_batches = fixed_update_remaining_batches(
+                self.max_updates, self.exp_tracker.optimizer_step,
+                self.gradient_accumulation_steps,
+            )
+            if len(loader) != remaining_batches:
+                raise ValueError(
+                    f"Sampler has {len(loader)} remaining batches, but "
+                    f"{remaining_batches} are required by the optimizer-update "
+                    "budget. Refusing an inconsistent checkpoint or sampler."
+                )
+        elif hasattr(loader.sampler, "set_epoch"):
             loader.sampler.set_epoch(epoch)
         
         skipped_batches = getattr(loader.sampler, 'skipped_batches', 0)
@@ -507,6 +619,14 @@ class MemVLNTrainer():
         checkpoint_due = False
         validation_due = False
         active_batches = min(len(loader), 501) if self.debug else len(loader)
+        if fixed_updates and self.debug:
+            # A debug stop is also a full optimizer boundary, never a partial
+            # accumulation that the checkpoint cannot restore.
+            debug_batches = max(1, 501 // self.gradient_accumulation_steps)
+            active_batches = min(
+                len(loader), debug_batches * self.gradient_accumulation_steps,
+            )
+        initial_optimizer_step = self.exp_tracker.optimizer_step
 
         for i, data_dict in enumerate(loader):
             if i >= active_batches:
@@ -552,9 +672,9 @@ class MemVLNTrainer():
                     checkpoint_due = checkpoint_due or (
                         self.exp_tracker.loader_step % self.save_interval == 0
                     )
-                    validation_due = validation_due or (
+                    validation_due = validation_due or (not fixed_updates and (
                         self.exp_tracker.loader_step % self.val_interval == 0
-                    )
+                    ))
 
             if self.use_custom_sampler:
                 if not hasattr(loader.sampler, 'mark_batch_consumed'):
@@ -567,7 +687,18 @@ class MemVLNTrainer():
             # A full-state checkpoint does not contain partial accumulated
             # gradients, so interval hooks run only after an optimizer boundary.
             if self.accelerator.sync_gradients:
+                if self.accelerator.optimizer_step_was_skipped:
+                    if fixed_updates:
+                        raise RuntimeError(
+                            "An optimizer update was skipped. Fixed-update "
+                            "training cannot silently count it toward the budget."
+                        )
+                else:
+                    self.exp_tracker.step_optimizer()
+
                 if checkpoint_due:
+                    if fixed_updates:
+                        self.log_sampling_progress(loader.sampler)
                     self.save(model_only=False)
                     if hasattr(loader.sampler, 'sync_progress'):
                         loader.sampler.sync_progress()
@@ -579,6 +710,18 @@ class MemVLNTrainer():
                         self.save('best.pth', model_only=True)
                     self.model.train()
                     validation_due = False
+
+        if fixed_updates:
+            expected_updates = initial_optimizer_step + (
+                active_batches // self.gradient_accumulation_steps
+            )
+            if self.exp_tracker.optimizer_step != expected_updates:
+                raise RuntimeError(
+                    f"Training completed {self.exp_tracker.optimizer_step} updates; "
+                    f"expected {expected_updates}. The sampler ended early or "
+                    "gradient accumulation was inconsistent."
+                )
+            self.log_sampling_progress(loader.sampler)
 
         logger.info(f"Finish training epoch {epoch+1}")
 
@@ -638,6 +781,35 @@ class MemVLNTrainer():
 
         logger.info("Finish testing")
 
+    def log_sampling_progress(self, sampler):
+        """Gather rank-local exposure counts only at checkpoint/end boundaries.
+
+        Accelerate trackers write from the main rank. Gather explicitly so its
+        logs include every independent stream and the actual global mixture.
+        """
+        metrics = sampler.get_progress_metrics()
+        keys = sorted(metrics)
+        local_counts = torch.tensor(
+            [metrics[key] for key in keys],
+            device=self.accelerator.device, dtype=torch.float64,
+        )
+        rank_counts = self.accelerator.gather(local_counts).reshape(
+            self.accelerator.num_processes, len(keys),
+        )
+        if not self.accelerator.is_main_process:
+            return
+        rank_counts = rank_counts.cpu()
+        results = {
+            f'rank_{rank}/{key}': rank_counts[rank, column].item()
+            for rank in range(self.accelerator.num_processes)
+            for column, key in enumerate(keys)
+        }
+        results.update({
+            f'global/{key}': rank_counts[:, column].sum().item()
+            for column, key in enumerate(keys)
+        })
+        self.log(results, mode='train', note='sampling')
+
     def log(self, results, mode='train', note='default'):
         log_dict = {}
         for key, val in results.items():
@@ -659,7 +831,31 @@ class MemVLNTrainer():
             # automatically filter non-learnable params, and save on main_process
             self.accelerator.save(model_state_dict, os.path.join(path, 'pytorch_model.bin'))
         else:
-            self.accelerator.save_state(exclude_frozen_parameters=True)   # self.exp_dir / checkpoints
+            sampler_checkpoint = None
+            if self.max_updates is not None:
+                if not self.accelerator.sync_gradients:
+                    raise RuntimeError("Fixed-update checkpoints require an optimizer boundary")
+                loader = list(self.data_loaders['train']['dataset_mix'].values())[0]
+                sampler_checkpoint = {
+                    'version': 1,
+                    'max_updates': self.max_updates,
+                    'gradient_accumulation_steps': self.gradient_accumulation_steps,
+                    'world_size': self.accelerator.num_processes,
+                    'optimizer_step': self.exp_tracker.optimizer_step,
+                    'schedule': self.fixed_update_schedule_contract,
+                    'sampler': loader.sampler.state_dict(),
+                }
+            checkpoint_dir = self.accelerator.save_state(exclude_frozen_parameters=True)
+            if sampler_checkpoint is not None:
+                # Accelerate's registered custom objects are main-rank state.
+                # This sampler is independent on every rank, so each process
+                # must save its own consumed (not prefetched) progress.
+                destination = Path(checkpoint_dir) / (
+                    f"sampler_rank_{self.accelerator.process_index}.pt"
+                )
+                temporary = destination.with_suffix('.pt.tmp')
+                torch.save(sampler_checkpoint, temporary)
+                os.replace(temporary, destination)
         self.accelerator.wait_for_everyone()
 
     def load(self, path, model_only=False, prepared=True):
@@ -693,10 +889,52 @@ class MemVLNTrainer():
             report_model_load_incompatibilities(missing_keys, unexpected_keys)
         else:
             # resume training (called after accelerator.prepare)
+            sampler_checkpoint = None
+            if self.max_updates is not None:
+                missing_ranks = [
+                    rank for rank in range(self.accelerator.num_processes)
+                    if not (Path(path) / f"sampler_rank_{rank}.pt").is_file()
+                ]
+                if missing_ranks:
+                    raise FileNotFoundError(
+                        f"Incomplete fixed-update checkpoint {path}: missing "
+                        f"sampler state for ranks {missing_ranks}. Model-only "
+                        "weights can be used as initialization, not full resume."
+                    )
+                sampler_checkpoint = torch.load(
+                    Path(path) / f"sampler_rank_{self.accelerator.process_index}.pt",
+                    weights_only=True, map_location='cpu',
+                )
+                expected = {
+                    'version': 1,
+                    'max_updates': self.max_updates,
+                    'gradient_accumulation_steps': self.gradient_accumulation_steps,
+                    'world_size': self.accelerator.num_processes,
+                    'schedule': self.fixed_update_schedule_contract,
+                }
+                for key, value in expected.items():
+                    if sampler_checkpoint.get(key) != value:
+                        raise ValueError(
+                            f"Cannot resume: sampler checkpoint {key}="
+                            f"{sampler_checkpoint.get(key)!r}, expected {value!r}"
+                        )
             if self.accelerator.distributed_type == 'DEEPSPEED':
                 self.accelerator.load_state(path, load_module_strict=False)
             else:
                 self.accelerator.load_state(path, strict=False)
+            if sampler_checkpoint is not None:
+                if sampler_checkpoint['optimizer_step'] != self.exp_tracker.optimizer_step:
+                    raise ValueError("Sampler checkpoint and optimizer tracker disagree on update count")
+                loader = list(self.data_loaders['train']['dataset_mix'].values())[0]
+                loader.sampler.load_state_dict(sampler_checkpoint['sampler'])
+                model = self.accelerator.unwrap_model(self.model)
+                model.reset_episode_state()
+                logger.warning(
+                    "Resumed fixed-update training. In-flight episodes restart "
+                    "from their first item to rebuild memory; replay consumes "
+                    "the remaining update budget. This is not an exact "
+                    "mid-episode continuation."
+                )
             self.accelerator.project_configuration.iteration = (
                 checkpoint_index(path) + 1
             )
@@ -704,15 +942,23 @@ class MemVLNTrainer():
 
     def run(self):
         if self.mode == 'train':
-            start_epoch = self.exp_tracker.epoch
-            for epoch in range(start_epoch, self.epochs):
-                self.train_step(epoch)
-                self.exp_tracker.step()
-                self.save(model_only=False)   # automatic checkpointing
-                loader = list(self.data_loaders['train']['dataset_mix'].values())[0]
-                if hasattr(loader.sampler, 'sync_progress'):
-                    loader.sampler.sync_progress()
-                self.val_step(epoch)
+            if self.max_updates is not None:
+                if self.exp_tracker.optimizer_step < self.max_updates:
+                    self.train_step(0)
+                    self.save(model_only=False)
+                    self.val_step(0)
+                else:
+                    logger.info("Fixed optimizer-update budget is already complete")
+            else:
+                start_epoch = self.exp_tracker.epoch
+                for epoch in range(start_epoch, self.epochs):
+                    self.train_step(epoch)
+                    self.exp_tracker.step()
+                    self.save(model_only=False)   # automatic checkpointing
+                    loader = list(self.data_loaders['train']['dataset_mix'].values())[0]
+                    if hasattr(loader.sampler, 'sync_progress'):
+                        loader.sampler.sync_progress()
+                    self.val_step(epoch)
         else:
             self.val_step(0)
 

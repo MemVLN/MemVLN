@@ -876,6 +876,16 @@ class VLNDatasetMix(Dataset):
         mix_dict = cfg.task.dataset_mix.VLNDatasetMix.mix
         ratio = self._normalize_ratios(cfg.task.dataset_mix.VLNDatasetMix.ratio)
         self.ratio_unit = getattr(cfg.task.dataset_mix.VLNDatasetMix, 'ratio_unit', 'sample')
+        sampling = getattr(cfg.task.dataset_mix.VLNDatasetMix, 'sampling', None)
+        self.sampling_mode = getattr(sampling, 'mode', 'epoch')
+        if self.sampling_mode not in ('epoch', 'probabilistic_episode'):
+            raise ValueError(f"Unsupported episode sampling mode: {self.sampling_mode}")
+        if self.sampling_mode == 'probabilistic_episode':
+            if not self.use_custom_sampler or self.ratio_unit != 'episode':
+                raise ValueError(
+                    "probabilistic_episode requires use_custom_sampler=true and "
+                    "ratio_unit=episode to preserve complete nav/summary history"
+                )
         logger.info(f"VLNDatasetMix about to load:\n{OmegaConf.to_yaml(mix_dict, resolve=True)}\n")
         for task, v0 in mix_dict.items():
             for source in v0:
@@ -890,11 +900,28 @@ class VLNDatasetMix(Dataset):
             assert len(ratios) == len(self.datasets), \
                 f"VLNDatasetMix ratio length {len(ratios)} must match dataset count {len(self.datasets)}"
 
+        if self.sampling_mode == 'probabilistic_episode':
+            if any(r != 1.0 for r in ratios):
+                raise ValueError(
+                    "probabilistic_episode requires all ratio multipliers to be 1; "
+                    "set dataset selection with sampling.dataset_probabilities"
+                )
+            for summary, navigation in (
+                ('vln_traj_sum_mp3d_r2r', 'vln_mp3d_r2r'),
+                ('vln_traj_sum_mp3d_rxr', 'vln_mp3d_rxr'),
+            ):
+                if summary in self.dataset_keys and navigation not in self.dataset_keys:
+                    raise ValueError(
+                        f"probabilistic_episode requires navigation {navigation} "
+                        f"for summary dataset {summary}"
+                    )
+
         self.index_map = []
         self.index_range = [0]
         self.stream_episode_to_indices = None
         self.stream_episode_to_clip_ids = None
         self.stream_episode_to_orig_episode = None
+        self.stream_episode_to_domain = None
         if self.ratio_unit == 'episode':
             self._build_episode_index_map(ratios)
         elif self.ratio_unit == 'sample':
@@ -966,6 +993,7 @@ class VLNDatasetMix(Dataset):
         self.stream_episode_to_indices = {}
         self.stream_episode_to_clip_ids = {}
         self.stream_episode_to_orig_episode = {}
+        self.stream_episode_to_domain = {}
 
         # Navigation and summary share trajectory state within one replay.
         # Keep unrelated datasets and separate replays in distinct namespaces.
@@ -1003,6 +1031,10 @@ class VLNDatasetMix(Dataset):
                     self.stream_episode_to_indices.setdefault(stream_episode_id, [])
                     self.stream_episode_to_clip_ids.setdefault(stream_episode_id, [])
                     self.stream_episode_to_orig_episode[stream_episode_id] = orig_episode_id
+                    self.stream_episode_to_domain[stream_episode_id] = {
+                        'vln_mp3d_r2r': 'r2r',
+                        'vln_mp3d_rxr': 'rxr',
+                    }.get(stream_dataset_key, stream_dataset_key)
                     if paired_summary:
                         paired_summary_streams.append((dataset_key, stream_episode_id))
                     elif dataset_key in summary_to_navigation.values():
@@ -1058,11 +1090,23 @@ class VLNDatasetMix(Dataset):
         return self.datasets[0].processor
 
     def __getitem__(self, index):
+        occurrence_id = None
+        if isinstance(index, tuple):
+            if len(index) != 2:
+                raise ValueError("An episode sample must be (index, occurrence_id)")
+            index, occurrence_id = index
+            if not isinstance(occurrence_id, str) or not occurrence_id:
+                raise ValueError("Episode occurrence_id must be a nonempty string")
         entry = self.index_map[index]
+        if occurrence_id is not None and entry['stream_episode_id'] is None:
+            raise ValueError("Episode occurrence samples require ratio_unit=episode")
         data_dict = self.datasets[entry['dataset_idx']][entry['local_idx']]
         if entry['stream_episode_id'] is not None:
             data_dict = data_dict.copy()
             data_dict['orig_episode_id'] = data_dict.get('episode_id', entry['orig_episode_id'])
-            data_dict['episode_id'] = entry['stream_episode_id']
+            # The immutable token is sent to workers with the index. Never
+            # mutate a shared ID map: prefetch may hold multiple draws of the
+            # same source episode at once.
+            data_dict['episode_id'] = occurrence_id or entry['stream_episode_id']
             data_dict['dataset_key'] = entry['dataset_key']
         return data_dict

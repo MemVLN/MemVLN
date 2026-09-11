@@ -25,6 +25,11 @@ dataset_mix:
     train_dataloader_args: ${dataloader.train}
     # Consume each episode in temporal order; independent of ratio_unit.
     use_custom_sampler: True
+    sampling:
+      # Opt in with probabilistic_episode, ratio_unit=episode, dummy_lr_decay=false,
+      # and training.max_updates. Probabilities select a domain once per episode.
+      mode: epoch
+      dataset_probabilities: {r2r: 0.5, rxr: 0.5}
 
 vlnce:
   R2R:

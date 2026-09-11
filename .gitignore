@@ -10,6 +10,9 @@ __pycache__/
 .Python
 tests/*
 !/tests/test_episode_dataset_mix.py
+!/tests/test_probabilistic_episode_sampler.py
+!/tests/test_probabilistic_episode_integration.py
+!/tests/test_fixed_update_training.py
 build/
 develop-eggs/
 dist/
