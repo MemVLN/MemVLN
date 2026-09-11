@@ -31,15 +31,15 @@ backbone. Run it in the PPU container with:
 bash /workspace/MemVLN/scripts/train_ppu_probabilistic_sampling.sh
 ```
 
-The script sets `MAX_UPDATES=174235`: floor(1,393,883 original training items /
-8 ranks / batchsize 1 / accumulation 1). This represents approximately one
-original data-volume budget, not a guarantee that every episode is visited.
-The old sampler assigned whole episodes to ranks and trimmed every rank to the
-shortest rank, so its actual one-epoch update count may be lower. To match it
-exactly, substitute the `Total=N` value from that run's
-`Scheduler Init: Active=..., Skipped=..., Total=N` log (for the same 8-rank,
-batchsize-1, accumulation-1 setup). The script sets `WARMUP_UPDATES=50` to express
-the old 8-rank 400-tick warmup in optimizer-update units; see the LR section.
+The script sets `MAX_UPDATES=172330`, matching the supplied old-run log:
+`Scheduler Init: Active=172330, Skipped=0, Total=172330`, with 8 ranks,
+batchsize 1 and accumulation 1. This gives 1,378,640 global item consumptions.
+The raw dataset has 1,393,883 items, but the old sampler assigned whole episodes
+to ranks and trimmed every rank to the shortest rank. Its actual 172,330-update
+budget therefore supersedes the raw-count estimate of 174,235 updates.
+Equal consumption budgets do not guarantee the same episode coverage under
+random sampling. The script sets `WARMUP_UPDATES=50` to express the old 8-rank
+400-tick warmup in optimizer-update units; see the LR section.
 
 Keep the existing model, paths and launch options. Add these overrides to the
 full R2R+RxR task (replace `YOUR_UPDATE_COUNT` with the actual positive integer

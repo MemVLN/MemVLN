@@ -7,10 +7,10 @@ STREAMVGGT_PATH="/workspace/ckpts/StreamVGGT-1B.pth"
 DATA_BASE="/workspace/data/leo2_data/vln"
 OUTPUT_BASE="/workspace/outputs"
 
-# Approximately one original data-volume budget: floor(1,393,883 / 8).
-# For the exact old 1-epoch budget, use N from "Scheduler Init: ... Total=N"
-# in the corresponding 8-GPU, batchsize=1, gradient_accumulation_steps=1 run.
-MAX_UPDATES=174235
+# Match the old 8-GPU, batchsize=1, gradient_accumulation_steps=1 run:
+# "Scheduler Init: Active=172330, Skipped=0, Total=172330".
+# This is the length after the old sampler trimmed ranks to equal item counts.
+MAX_UPDATES=172330
 # Old 8-rank scheduler: 400 ticks / 8 = 50 actual optimizer updates.
 WARMUP_UPDATES=50
 
