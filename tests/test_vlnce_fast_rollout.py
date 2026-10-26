@@ -1,15 +1,19 @@
 import contextlib
+import gzip
 import importlib.util
 import json
 import sys
 import tempfile
 import types
 import unittest
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Dict
 from unittest import mock
 
 import numpy as np
+from omegaconf import OmegaConf
 
 from evaluator.vlnce_rollout import (
     VideoReplayTrace,
@@ -68,6 +72,19 @@ def habitat_config():
 
 
 class FastRolloutUtilityTests(unittest.TestCase):
+    def test_runtime_split_updates_ndtw_even_after_interpolation_resolution(self):
+        config = habitat_config()
+        config.habitat.task.measurements.ndtw = AttrDict(split="val_seen")
+        fake_habitat = SimpleNamespace(
+            config=SimpleNamespace(read_write=lambda _: contextlib.nullcontext())
+        )
+        with mock.patch.dict(sys.modules, {"habitat": fake_habitat}):
+            configure_fast_habitat(
+                config, split="val_unseen", gpu_device_id=0, fast_habitat=False
+            )
+        self.assertEqual(config.habitat.dataset.split, "val_unseen")
+        self.assertEqual(config.habitat.task.measurements.ndtw.split, "val_unseen")
+
     def test_video_selection_is_local_deterministic_scene_round_robin(self):
         scenes = {
             "/dataset/b/b.glb": [episode("b", index) for index in range(4)],
@@ -322,7 +339,7 @@ class FastRolloutUtilityTests(unittest.TestCase):
 
 
 class LazyNDTWTests(unittest.TestCase):
-    def test_ndtw_defers_work_and_finalizes_idempotently(self):
+    def _load_measures(self):
         class Measure:
             pass
 
@@ -330,6 +347,13 @@ class LazyNDTWTests(unittest.TestCase):
             @staticmethod
             def register_measure(cls):
                 return cls
+
+        @dataclass
+        class MeasurementConfig:
+            type: str = "???"
+
+        structured_config = types.ModuleType("habitat.config.default_structured_configs")
+        structured_config.MeasurementConfig = MeasurementConfig
 
         embodied_task = types.ModuleType("habitat.core.embodied_task")
         embodied_task.EmbodiedTask = object
@@ -353,6 +377,8 @@ class LazyNDTWTests(unittest.TestCase):
         stub_modules = {
             "fastdtw": fastdtw_module,
             "habitat": types.ModuleType("habitat"),
+            "habitat.config": types.ModuleType("habitat.config"),
+            "habitat.config.default_structured_configs": structured_config,
             "habitat.core": types.ModuleType("habitat.core"),
             "habitat.core.embodied_task": embodied_task,
             "habitat.core.registry": registry_module,
@@ -370,8 +396,67 @@ class LazyNDTWTests(unittest.TestCase):
             "_test_lazy_vlnce_measures", module_path
         )
         module = importlib.util.module_from_spec(spec)
+        module_patch = mock.patch.dict(sys.modules, {spec.name: module})
+        module_patch.start()
+        self.addCleanup(module_patch.stop)
         with mock.patch.dict(sys.modules, stub_modules):
             spec.loader.exec_module(module)
+        return module, dtw_impl
+
+    def test_ndtw_config_preserves_habitat_measurement_schema(self):
+        module, _ = self._load_measures()
+        measurement_base = module.MeasurementConfig
+
+        @dataclass
+        class TaskConfig:
+            measurements: Dict[str, measurement_base] = field(default_factory=dict)
+
+        task = OmegaConf.structured(TaskConfig)
+        task.measurements.ndtw = OmegaConf.structured(module.NDTWMeasurementConfig)
+        task = OmegaConf.merge(task, {
+            "measurements": {"ndtw": {"gt_path": "/gt/{split}.json.gz", "split": "val_unseen"}}
+        })
+        self.assertEqual(task.measurements.ndtw.gt_path, "/gt/{split}.json.gz")
+        self.assertEqual(task.measurements.ndtw.split, "val_unseen")
+
+    def test_ndtw_loads_configured_gt_and_split(self):
+        module, _ = self._load_measures()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for split in ("val_seen", "val_unseen"):
+                path = root / split / f"{split}_guide_gt.json.gz"
+                path.parent.mkdir()
+                payload = {split: {"locations": [[0.0, 0.0, 0.0]]}}
+                with gzip.open(path, "wt") as file:
+                    json.dump(payload, file)
+                measure = module.NDTW(
+                    sim=object(),
+                    config=SimpleNamespace(
+                        gt_path=str(root / "{split}" / "{split}_guide_gt.json.gz"),
+                        split=split,
+                    ),
+                )
+                self.assertEqual(measure.gt_path, str(path))
+                self.assertEqual(measure.gt_json, payload)
+
+            # An exact file path also works without a split placeholder.
+            measure = module.NDTW(
+                sim=object(), config=SimpleNamespace(gt_path=str(path))
+            )
+            self.assertEqual(measure.gt_json, payload)
+
+    def test_ndtw_rejects_missing_path_or_unresolved_split(self):
+        module, _ = self._load_measures()
+        for config, message in (
+            (SimpleNamespace(), "ndtw.gt_path"),
+            (SimpleNamespace(gt_path=""), "ndtw.gt_path"),
+            (SimpleNamespace(gt_path="/gt/{split}.json.gz"), "ndtw.split"),
+        ):
+            with self.subTest(config=config), self.assertRaisesRegex(ValueError, message):
+                module.NDTW(sim=object(), config=config)
+
+    def test_ndtw_defers_work_and_finalizes_idempotently(self):
+        module, dtw_impl = self._load_measures()
 
         position = [0.0, 0.0, 0.0]
         sim = SimpleNamespace(
@@ -381,7 +466,7 @@ class LazyNDTWTests(unittest.TestCase):
         )
         measure = module.NDTW.__new__(module.NDTW)
         measure._sim = sim
-        measure.dtw_func = fastdtw_module.fastdtw
+        measure.dtw_func = module.fastdtw
         trajectories = {
             "episode-a": [
                 [0.0, 0.0, 0.0],

@@ -1,0 +1,63 @@
+# Evaluation recipe for the released FRME checkpoint.
+# Fixed inference settings used for the reference checkpoint evaluation.
+defaults:
+  - default
+  - override task: sft_r2r_rxr_w_traj_sum
+  - override llm: qwen3-4b-mem
+  - override vision3d: streamvggt
+  - _self_
+
+mode: eval
+note: release_frme_eval
+rng_seed: 42
+num_gpu: 8
+base_dir: ./outputs
+
+logger:
+  entity: null
+
+vision3d:
+  ckpt_path: ${oc.env:MEMVLN_STREAMVGGT_CKPT,./pretrained/StreamVGGT/checkpoints.pth}
+
+data:
+  vln:
+    memory_prompt: true
+    obs_hist_sample: nearest
+    max_num_frames: 16
+    merge_action: true
+    max_act_hist: 0
+    skip_merge_step_obs: false
+    vggt_cache_feat: true
+
+llm:
+  cfg_path: ${oc.env:MEMVLN_QWEN_DIR,./pretrained/Qwen3-VL-4B-Instruct}
+  torch_dtype: bf16
+  attn_implementation: flash_attention_2
+  mem_module:
+    param_dtype: bf16
+    memory_consolidate_type: frme
+    episode_max_frame_num: 100
+    frame_max_tokens_num: 100
+    memory_token_num: 300
+    memory_merge_vggt_feat: false
+    visual_obs_mask_ratio_nav: 0.0
+    visual_obs_mask_ratio_aux: 1.0
+
+inference:
+  enabled: true
+  cache_grounded_memory: true
+  skip_memory_attention_weights: true
+  fast_habitat: false
+  empty_cache_on_episode_end: false
+  video_selection_seed: ${rng_seed}
+
+task:
+  vlnce:
+    R2R:
+      args:
+        split: val_unseen
+        save_video: 0
+    RxR:
+      args:
+        split: val_unseen
+        save_video: 0

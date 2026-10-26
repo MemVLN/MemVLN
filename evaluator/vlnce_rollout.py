@@ -158,6 +158,9 @@ def configure_fast_habitat(
             simulator.gpu_device_id = int(gpu_device_id)
         config.habitat.dataset.split = split
         measurements = config.habitat.task.measurements
+        if "ndtw" in measurements and "split" in measurements["ndtw"]:
+            # Also update configs whose split interpolation was already resolved.
+            measurements["ndtw"].split = split
         for name in ("top_down_map", "collisions"):
             if name in measurements:
                 measurements.pop(name)

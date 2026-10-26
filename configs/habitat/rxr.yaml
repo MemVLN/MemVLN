@@ -9,6 +9,8 @@ defaults:
   - /habitat/task/lab_sensors:
     - gps_sensor
     - compass_sensor
+  - /habitat/task/measurements:
+    - ndtw
   - _self_
 
 habitat:
@@ -52,11 +54,11 @@ habitat:
         type: OracleNavigationError
       ndtw:
         type: NDTW
+        split: ${habitat.dataset.split}
+        gt_path: ${oc.env:MEMVLN_RXR_GT_ROOT,./datasets/VLN-CE/RxR}/{split}/{split}_guide_gt.json.gz
         
   dataset:
     type: R2RVLN-v1
     split: val_unseen
-    scenes_dir: /share/generalvision/share/datasets/VLN-CE
-    data_path: /share/generalvision/share/datasets/VLN-CE/RxR/{split}/{split}_guide_en.json.gz
-    # scenes_dir: /mnt/fillipo/Datasets/VLN-CE
-    # data_path: /mnt/fillipo/Datasets/VLN-CE/RxR/{split}/{split}_guide_en.json.gz
+    scenes_dir: ${oc.env:MEMVLN_SCENES_DIR,./datasets/VLN-CE}
+    data_path: ${oc.env:MEMVLN_RXR_DATA_ROOT,./datasets/VLN-CE/RxR}/{split}/{split}_guide_en.json.gz

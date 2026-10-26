@@ -27,17 +27,20 @@ Before running an experiment, make sure the robot has enough free space to move 
   - `realsense-ros`
   - `livox_ros_driver2`
   - `FAST_LIO`
-- The G1 client subscribes to `/camera/color/image_raw` and `/Odometry`, and sends low-level motion commands through the Unitree G1 SDK.
+- The G1 client subscribes to `/camera/color/image_raw` and `/Odometry`, and sends velocity commands through the Unitree G1 SDK's `LocoClient.Move` interface.
 
 ## Run the VLN Server
 
-Run the HTTP inference server on the remote GPU server:
+Run the HTTP inference server on the GPU server, starting from the repository root. Set the navigation checkpoint and both pretrained-model paths explicitly:
 
 ```bash
 cd realworld
-python http_realworld_server.py \
+WANDB_MODE=disabled python http_realworld_server.py \
   --config ../configs/realworld.yaml \
-  llm.cfg_path=/home/wangyan/bigai/pretrained_weights/Qwen3-VL-4B-Instruct \
+  pretrained_ckpt_path=/path/to/checkpoint/model.safetensors \
+  llm.cfg_path="$PWD/pretrained/Qwen3-VL-4B-Instruct" \
+  vision3d.ckpt_path="$PWD/pretrained/StreamVGGT/checkpoints.pth" \
+  base_dir=/path/to/realworld_outputs \
   data.vln.memory_prompt=True
 ```
 
@@ -119,4 +122,4 @@ Both clients use the same interactive control flow:
 - Press `q` to discard the current frame without executing an action.
 - Press `r` to end the current episode and reset for a new instruction.
 
-Trajectory images and logs are saved under `../vln_dataset`.
+At the end of each episode, answer the save prompt to retain or discard the recording. Saved trajectory images and logs are stored under `../vln_dataset`, relative to the client working directory.

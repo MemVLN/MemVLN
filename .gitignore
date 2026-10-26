@@ -13,6 +13,7 @@ tests/*
 !/tests/test_probabilistic_episode_sampler.py
 !/tests/test_probabilistic_episode_integration.py
 !/tests/test_fixed_update_training.py
+!/tests/test_eval_release_config.py
 build/
 develop-eggs/
 dist/
@@ -167,6 +168,9 @@ cython_debug/
 # custom
 .DS_Store
 /_private/
+/pretrained/
+/checkpoints/
+/datasets/
 /output/
 /tmp/
 .vscode/

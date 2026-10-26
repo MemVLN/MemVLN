@@ -1,15 +1,33 @@
 import gzip
 import json
+from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple, Union
 
 import numpy as np
 from fastdtw import fastdtw
+from habitat.config.default_structured_configs import MeasurementConfig
 from habitat.core.embodied_task import EmbodiedTask, Measure
 from habitat.core.registry import registry
 from habitat.core.simulator import Simulator
 from habitat.tasks.nav.nav import DistanceToGoal, Success
 from numpy import ndarray
-from omegaconf import DictConfig
+from hydra.core.config_store import ConfigStore
+from omegaconf import DictConfig, MISSING
+
+
+@dataclass
+class NDTWMeasurementConfig(MeasurementConfig):
+    type: str = "NDTW"
+    gt_path: str = MISSING
+    split: str = "${habitat.dataset.split}"
+
+
+ConfigStore.instance().store(
+    group="habitat/task/measurements",
+    name="ndtw",
+    package="habitat.task.measurements.ndtw",
+    node=NDTWMeasurementConfig,
+)
 
 
 def euclidean_distance(
@@ -220,7 +238,13 @@ class NDTW(Measure):
         self._config = config
         self.dtw_func = fastdtw
 
-        self.gt_path = "/share/generalvision/share/datasets/VLN-CE/RxR/val_unseen/val_unseen_guide_gt.json.gz" # Hardcoded
+        gt_path = getattr(config, "gt_path", None)
+        if not isinstance(gt_path, str) or not gt_path.strip():
+            raise ValueError("NDTW requires a non-empty measurements.ndtw.gt_path")
+        split = getattr(config, "split", None)
+        if "{split}" in gt_path and (not isinstance(split, str) or not split):
+            raise ValueError("NDTW gt_path with {split} requires measurements.ndtw.split")
+        self.gt_path = gt_path.format(split=split)
         with gzip.open(self.gt_path, "rt") as f:
             self.gt_json = json.load(f)
 

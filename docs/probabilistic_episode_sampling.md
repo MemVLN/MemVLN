@@ -1,5 +1,9 @@
 # Rank-local probabilistic episode sampling
 
+This is an optional training recipe. The default training config uses epoch
+sampling; the paper checkpoint is evaluated with
+[`eval_release`](../configs/eval_release.yaml).
+
 The opt-in `probabilistic_episode` sampler maintains one independent training
 stream per GPU/rank. Each time its current episode finishes, that rank:
 
@@ -31,15 +35,14 @@ backbone. Run it in the PPU container with:
 bash /workspace/MemVLN/scripts/train_ppu_probabilistic_sampling.sh
 ```
 
-The script sets `MAX_UPDATES=172330`, matching the supplied old-run log:
-`Scheduler Init: Active=172330, Skipped=0, Total=172330`, with 8 ranks,
-batchsize 1 and accumulation 1. This gives 1,378,640 global item consumptions.
-The raw dataset has 1,393,883 items, but the old sampler assigned whole episodes
-to ranks and trimmed every rank to the shortest rank. Its actual 172,330-update
-budget therefore supersedes the raw-count estimate of 174,235 updates.
-Equal consumption budgets do not guarantee the same episode coverage under
-random sampling. The script sets `WARMUP_UPDATES=50` to express the old 8-rank
-400-tick warmup in optimizer-update units; see the LR section.
+The script defaults to `MAX_UPDATES=172330`. With eight ranks, batch size 1,
+and accumulation 1, this corresponds to 1,378,640 global item consumptions.
+Set this budget from the actual optimizer-update count of the epoch-based
+run you want to compare against: whole-episode rank assignment and trimming
+can make that count differ from the raw dataset size divided by world size.
+Equal consumption budgets do not guarantee equal episode coverage. The script
+sets `WARMUP_UPDATES=50` to express an eight-rank, 400-tick epoch-sampler warmup
+in optimizer-update units; see the LR section.
 
 Keep the existing model, paths and launch options. Add these overrides to the
 full R2R+RxR task (replace `YOUR_UPDATE_COUNT` with the actual positive integer
