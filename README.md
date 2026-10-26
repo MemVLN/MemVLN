@@ -520,7 +520,8 @@ This codebase builds on
 [LEO](https://github.com/embodied-generalist/embodied-generalist),
 [Qwen3-VL](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct),
 [StreamVGGT](https://github.com/wzzheng/StreamVGGT),
-[Habitat-Lab](https://github.com/facebookresearch/habitat-lab), R2R, FGR2R,
+[Habitat-Lab](https://github.com/facebookresearch/habitat-lab),
+[StreamVLN](https://github.com/InternRobotics/StreamVLN), R2R, FGR2R,
 and RxR.
 Please follow the licenses and terms of each upstream project and dataset.
 
