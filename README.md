@@ -96,10 +96,10 @@ instructions with five runs per instruction:
 | Navigation checkpoint | [Hugging Face](https://huggingface.co/Yannnnnnnn/MemVLN), 2.45 GiB |
 | R2R/RxR data, processed FGR2R annotations, and real-world recordings | [Hugging Face](https://huggingface.co/datasets/Yannnnnnnn/MemVLN-data), 71.77 GiB |
 
-The two Hugging Face repositories are currently private during release
-preparation. Access requires an authorized account. The dataset uses access
-requests for the Matterport3D agreement; its visibility will be changed with
-the public release. File revisions and checksums are recorded in
+The checkpoint is publicly downloadable. Dataset downloads require accepting
+the Matterport3D agreement on the dataset page and logging in with
+`hf auth login`; access is automatically granted after completing the form.
+File revisions and checksums are recorded in
 [release/artifacts.json](release/artifacts.json).
 
 ## Installation
