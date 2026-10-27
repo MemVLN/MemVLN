@@ -4,7 +4,7 @@
 
 **Persistent, compact navigation memory for monocular streaming video**
 
-**[Project](https://memvln.github.io/) · [Checkpoint](https://huggingface.co/Yannnnnnnn/MemVLN) · [Data](https://huggingface.co/datasets/Yannnnnnnn/MemVLN-data) · [Installation](#installation) · [Evaluation](#evaluation)**
+**[Paper](https://arxiv.org/abs/2610.35066) · [Project](https://memvln.github.io/) · [Checkpoint](https://huggingface.co/Yannnnnnnn/MemVLN) · [Data](https://huggingface.co/datasets/Yannnnnnnn/MemVLN-data) · [Installation](#installation) · [Evaluation](#evaluation)**
 
 </div>
 
@@ -504,13 +504,17 @@ contracts; benchmark metrics require the model and Habitat environment.
 
 ## Citation
 
-The arXiv identifier will be added after the preprint is available.
+[arXiv:2610.35066](https://arxiv.org/abs/2610.35066).
 
 ```bibtex
 @misc{wang2026memvln,
   title  = {MemVLN: Streaming Episodic Memory for Vision-Language Navigation},
   author = {Wang, Yan and Huang, Jiangyong and Huang, Siyuan and Jia, Baoxiong},
-  year   = {2026}
+  year   = {2026},
+  eprint = {2610.35066},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CV},
+  url    = {https://arxiv.org/abs/2610.35066}
 }
 ```
 
